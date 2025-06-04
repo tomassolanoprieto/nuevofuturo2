@@ -767,6 +767,14 @@ export default function SupervisorDelegationReports() {
         align: 'justify'
       });
 
+      // Add the Nuevo Futuro logo
+      try {
+        const imgData = '/assets/AF_NF_rgb.fw.png'; // Updated path to use public assets
+        doc.addImage(imgData, 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
+      } catch (error) {
+        console.error('Error adding logo to PDF:', error);
+      }
+
       doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
     } else {
       const exportData = reports.map(report => ({
