@@ -43,6 +43,7 @@ const chunkArray = <T,>(array: T[], size: number): T[][] => {
 const allWorkCenterOptions = [
   "MADRID HOGARES DE EMANCIPACION V. DEL PARDILLO",
   "ALAVA HAZIBIDE",
+  "ALAVA ESTIBALIZ",
   "SANTANDER OFICINA",
   "MADRID CUEVAS DE ALMANZORA",
   "SEVILLA ROSALEDA",
