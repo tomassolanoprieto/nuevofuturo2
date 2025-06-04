@@ -643,6 +643,14 @@ export default function CompanyReports() {
         align: 'justify'
       });
 
+      // Add the Nuevo Futuro logo
+      try {
+        const imgData = '/src/lib/AF_NF_rgb.fw.png';
+        doc.addImage(imgData, 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
+      } catch (error) {
+        console.error('Error adding logo to PDF:', error);
+      }
+
       doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
     } else {
       const exportData = reports.map(report => ({
