@@ -113,6 +113,8 @@ export default function InspectorReports() {
         .not('time_type', 'is', null)
         .neq('time_type', '');
 
+      if (error) throw error;
+      
       if (data) {
         const uniqueTimeTypes = [...new Set(data.map(entry => entry.time_type))];
         setTimeTypes(uniqueTimeTypes);
@@ -124,16 +126,17 @@ export default function InspectorReports() {
 
   const fetchWorkCenters = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data } = await supabase
+      // Fetch all work centers from employee_profiles
+      const { data, error } = await supabase
         .from('employee_profiles')
-        .select('work_centers')
-        .eq('company_id', user.id);
+        .select('work_centers');
+
+      if (error) throw error;
 
       if (data) {
-        const uniqueWorkCenters = [...new Set(data.flatMap(emp => emp.work_centers || []))];
+        // Extract all work centers and remove duplicates
+        const allWorkCenters = data.flatMap(emp => emp.work_centers || []);
+        const uniqueWorkCenters = [...new Set(allWorkCenters)].sort();
         setWorkCenters(uniqueWorkCenters);
       }
     } catch (error) {
@@ -143,22 +146,24 @@ export default function InspectorReports() {
 
   const fetchEmployees = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
       let query = supabase
         .from('employee_profiles')
         .select('*')
-        .eq('company_id', user.id)
         .eq('is_active', true);
 
       if (selectedWorkCenter) {
         query = query.contains('work_centers', [selectedWorkCenter]);
       }
 
-      const { data } = await query;
+      const { data, error } = await query;
+      
+      if (error) throw error;
+      
       if (data) {
         setEmployees(data);
+        if (data.length > 0 && reportType === 'official' && !selectedEmployee) {
+          setSelectedEmployee(data[0].id);
+        }
       }
     } catch (error) {
       console.error('Error fetching employees:', error);
@@ -208,9 +213,6 @@ export default function InspectorReports() {
     setIsLoading(true);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
       // Validación de parámetros requeridos
       if (reportType === 'annual' && !selectedYear) {
         setReports([]);
@@ -642,6 +644,18 @@ export default function InspectorReports() {
         maxWidth: 180,
         align: 'justify'
       });
+
+      // Add logo
+      try {
+        const logoWidth = 40;
+        const logoHeight = 20;
+        const logoX = 85; // Centered
+        const logoY = doc.lastAutoTable.finalY + 90;
+        
+        doc.addImage('/assets/AF_NF_rgb.fw.png', 'PNG', logoX, logoY, logoWidth, logoHeight);
+      } catch (err) {
+        console.error('Error adding logo to PDF:', err);
+      }
 
       doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
     } else {
