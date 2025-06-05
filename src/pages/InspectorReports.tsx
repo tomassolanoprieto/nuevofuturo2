@@ -39,7 +39,7 @@ const chunkArray = <T,>(array: T[], size: number): T[][] => {
   return chunks;
 };
 
-export default function CompanyReports() {
+export default function InspectorReports() {
   const [reports, setReports] = useState<Report[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [reportType, setReportType] = useState<'daily' | 'annual' | 'official' | 'alarms'>('daily');
