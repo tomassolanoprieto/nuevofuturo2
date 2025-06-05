@@ -645,18 +645,6 @@ export default function InspectorReports() {
         align: 'justify'
       });
 
-      // Add logo
-      try {
-        const logoWidth = 40;
-        const logoHeight = 20;
-        const logoX = 85; // Centered
-        const logoY = doc.lastAutoTable.finalY + 90;
-        
-        doc.addImage('/assets/AF_NF_rgb.fw.png', 'PNG', logoX, logoY, logoWidth, logoHeight);
-      } catch (err) {
-        console.error('Error adding logo to PDF:', err);
-      }
-
       doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
     } else {
       const exportData = reports.map(report => ({
