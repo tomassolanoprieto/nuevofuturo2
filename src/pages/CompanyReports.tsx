@@ -4,7 +4,6 @@ import { Download, Search, FileText, AlertTriangle } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
-import logo from '../lib/AF_NF_rgb.fw.png';
 
 interface DailyReport {
   date: string;
@@ -640,11 +639,31 @@ export default function CompanyReports() {
         align: 'justify'
       });
 
-      try {
-        doc.addImage(logo, 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
-      } catch (error) {
-        console.error('Error adding logo to PDF:', error);
-      }
+      const addLogoToPdf = async (doc: jsPDF, yPosition: number) => {
+  try {
+    // Intenta con la imagen principal
+    const mainLogo = await loadImage('/assets/AF_NF_rgb.fw.png');
+    doc.addImage(mainLogo, 'PNG', 85, yPosition, 40, 20);
+  } catch (error) {
+    console.warn('Usando imagen alternativa');
+    // Imagen alternativa en base64 (ejemplo minimalista)
+    const fallbackLogo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH4AkEEjIZJ3+5RgAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUHAAAAFUlEQVQ4y2NgGAWjYBSMglEwCkbBwAAA//8SYAVXH9eQ5QAAAABJRU5ErkJggg==';
+    doc.addImage(fallbackLogo, 'PNG', 85, yPosition, 40, 20);
+  }
+};
+
+// Función auxiliar para cargar imágenes
+const loadImage = (url: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(url);
+    img.onerror = reject;
+    img.src = url;
+  });
+};
+
+// Luego en handleExport llamas:
+await addLogoToPdf(doc, doc.lastAutoTable.finalY + 80);
 
       doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
     } else {
