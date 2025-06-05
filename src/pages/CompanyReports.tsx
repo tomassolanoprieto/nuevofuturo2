@@ -663,7 +663,9 @@ try {
   reader.readAsDataURL(blob);
 } catch (error) {
   console.error('Error adding logo to PDF:', error);
-      doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
+      }
+      
+  doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
     } else {
       const exportData = reports.map(report => ({
         'Nombre': report.employee.fiscal_name,
