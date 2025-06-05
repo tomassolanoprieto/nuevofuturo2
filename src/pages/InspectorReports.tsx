@@ -643,12 +643,6 @@ export default function CompanyReports() {
         align: 'justify'
       });
 
-      try {
-        doc.addImage('/assets/AF_NF_rgb.fw.png', 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
-      } catch (error) {
-        console.error('Error adding logo to PDF:', error);
-      }
-
       doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
     } else {
       const exportData = reports.map(report => ({
@@ -816,7 +810,6 @@ export default function CompanyReports() {
                       value={hoursLimit.toString()}
                       onChange={(e) => {
                         const value = parseInt(e.target.value);
-                
                         if (!isNaN(value) && value > 0) {
                           setHoursLimit(value);
                         }
