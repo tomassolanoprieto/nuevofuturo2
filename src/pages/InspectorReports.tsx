@@ -644,7 +644,7 @@ export default function CompanyReports() {
       });
 
       try {
-        doc.addImage('/src/lib/AF_NF_rgb.png', 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
+        doc.addImage('/assets/AF_NF_rgb.fw.png', 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
       } catch (error) {
         console.error('Error adding logo to PDF:', error);
       }
@@ -816,6 +816,7 @@ export default function CompanyReports() {
                       value={hoursLimit.toString()}
                       onChange={(e) => {
                         const value = parseInt(e.target.value);
+                
                         if (!isNaN(value) && value > 0) {
                           setHoursLimit(value);
                         }
