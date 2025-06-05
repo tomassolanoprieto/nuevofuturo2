@@ -643,10 +643,9 @@ export default function CompanyReports() {
         align: 'justify'
       });
 
-      // Add the Nuevo Futuro logo
+      // Updated image path to use the public assets directory
       try {
-        const imgData = '/src/lib/AF_NF_rgb.fw.png';
-        doc.addImage(imgData, 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
+        doc.addImage('/assets/AF_NF_rgb.fw.png', 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
       } catch (error) {
         console.error('Error adding logo to PDF:', error);
       }
