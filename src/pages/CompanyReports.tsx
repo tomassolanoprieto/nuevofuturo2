@@ -639,11 +639,32 @@ export default function CompanyReports() {
         align: 'justify'
       });
 
-      try {
-        doc.addImage('/assets/AF_NF_rgb.fw.png', 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
-      } catch (error) {
-        console.error('Error adding logo to PDF:', error);
-      }
+      // En tu función handleExport, modifica la parte de la imagen así:
+try {
+  // Intenta cargar la imagen desde la ruta correcta (asegúrate de que esté en /public/assets/)
+  const logoUrl = '/assets/AF_NF_rgb.fw.png';
+  
+  // Convertimos la imagen a Base64 para asegurar la carga
+  const response = await fetch(logoUrl);
+  const blob = await response.blob();
+  const reader = new FileReader();
+  
+  reader.onloadend = function() {
+    const base64data = reader.result as string;
+    doc.addImage(base64data, 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
+    doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
+  };
+  
+  reader.onerror = () => {
+    console.warn('No se pudo cargar el logo, generando PDF sin él');
+    doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
+  };
+  
+  reader.readAsDataURL(blob);
+} catch (error) {
+  console.error('Error adding logo to PDF:', error);
+  doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
+}
 
       doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
     } else {
