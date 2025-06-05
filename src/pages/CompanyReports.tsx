@@ -56,7 +56,6 @@ export default function CompanyReports() {
   const [timeTypes, setTimeTypes] = useState<string[]>([]);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
 
-  // Carga inicial de datos necesarios
   useEffect(() => {
     const loadInitialData = async () => {
       try {
@@ -77,7 +76,6 @@ export default function CompanyReports() {
     loadInitialData();
   }, []);
 
-  // Generar reporte cuando cambian los parámetros
   useEffect(() => {
     if (!initialLoadComplete) return;
 
@@ -211,7 +209,6 @@ export default function CompanyReports() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Validación de parámetros requeridos
       if (reportType === 'annual' && !selectedYear) {
         setReports([]);
         setIsLoading(false);
@@ -230,7 +227,6 @@ export default function CompanyReports() {
         return;
       }
 
-      // Actualizar lista de empleados según filtros
       await fetchEmployees();
       if (employees.length === 0) {
         setReports([]);
@@ -643,9 +639,8 @@ export default function CompanyReports() {
         align: 'justify'
       });
 
-      // Add the Nuevo Futuro logo
       try {
-        doc.addImage('/src/lib/AF_NF_rgb.png', 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
+        doc.addImage('/assets/AF_NF_rgb.fw.png', 'PNG', 85, doc.lastAutoTable.finalY + 80, 40, 20);
       } catch (error) {
         console.error('Error adding logo to PDF:', error);
       }
@@ -773,7 +768,6 @@ export default function CompanyReports() {
                     value={selectedWorkCenter}
                     onChange={(e) => {
                       setSelectedWorkCenter(e.target.value);
-                      // Actualizar empleados cuando cambia el centro de trabajo
                       fetchEmployees();
                     }}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
