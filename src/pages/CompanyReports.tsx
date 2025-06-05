@@ -633,45 +633,50 @@ export default function CompanyReports() {
       })}`, 14, doc.lastAutoTable.finalY + 60);
 
       doc.setFontSize(6);
-      const legalText = 'Registro realizado en cumplimiento del Real Decreto-ley 8/2019, de 8 de marzo, de medidas urgentes de protección social y de lucha contra la precariedad laboral en la jornada de trabajo ("BOE" núm. 61 de 12 de marzo), la regulación de forma expresa en el artículo 34 del texto refundido de la Ley del Estatuto de los Trabajadores (ET), la obligación de las empresas de registrar diariamente la jornada laboral.';
-      doc.text(legalText, 14, doc.lastAutoTable.finalY + 70, {
-        maxWidth: 180,
-        align: 'justify'
-      });
+const legalText = 'Registro realizado en cumplimiento del Real Decreto-ley 8/2019, de 8 de marzo, de medidas urgentes de protección social y de lucha contra la precariedad laboral en la jornada de trabajo ("BOE" núm. 61 de 12 de marzo), la regulación de forma expresa en el artículo 34 del texto refundido de la Ley del Estatuto de los Trabajadores (ET), la obligación de las empresas de registrar diariamente la jornada laboral.';
+doc.text(legalText, 14, doc.lastAutoTable.finalY + 70, {
+  maxWidth: 180,
+  align: 'justify'
+});
 
-      // Función auxiliar para cargar imágenes
-      const loadImage = (url: string): Promise<string> => {
-        return new Promise((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => resolve(url);
-          img.onerror = reject;
-          img.src = url;
-        });
-      };
+// Función auxiliar para cargar imágenes
+const loadImage = (url: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(url);
+    img.onerror = reject;
+    img.src = url;
+  });
+};
 
-      // Función para añadir el logo
-      const addLogoToPdf = async (doc: jsPDF, yPosition: number) => {
-        try {
-          // Intenta con la imagen principal
-          const mainLogo = await loadImage('/assets/AF_NF_rgb.fw.png');
-          doc.addImage(mainLogo, 'PNG', 85, yPosition, 40, 20);
-        } catch (error) {
-          console.warn('Usando imagen alternativa');
-          // Imagen alternativa en base64 (ejemplo minimalista)
-          const fallbackLogo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH4AkEEjIZJ3+5RgAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUHAAAAFUlEQVQ4y2NgGAWjYBSMglEwCkbBwAAA//8SYAVXH9eQ5QAAAABJRU5ErkJggg==';
-          doc.addImage(fallbackLogo, 'PNG', 85, yPosition, 40, 20);
-        }
-      };
+// Función para añadir el logo
+const addLogoToPdf = async (doc: jsPDF, yPosition: number) => {
+  try {
+    // Intenta con la imagen principal
+    const mainLogo = await loadImage('/assets/AF_NF_rgb.fw.png');
+    doc.addImage(mainLogo, 'PNG', 85, yPosition, 40, 20);
+  } catch (error) {
+    console.warn('Usando imagen alternativa');
+    // Imagen alternativa en base64 (ejemplo minimalista)
+    const fallbackLogo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH4AkEEjIZJ3+5RgAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUHAAAAFUlEQVQ4y2NgGAWjYBSMglEwCkbBwAAA//8SYAVXH9eQ5QAAAABJRU5ErkJggg==';
+    doc.addImage(fallbackLogo, 'PNG', 85, yPosition, 40, 20);
+  }
+};
 
-      // Añadir el logo y guardar el PDF
-      try {
-        await addLogoToPdf(doc, doc.lastAutoTable.finalY + 80);
-        doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
-      } catch (error) {
-        console.error('Error al generar el PDF:', error);
-        doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
-      }
-    } else {
+// Añadir el logo y guardar el PDF (usando una función async)
+const generatePdf = async () => {
+  try {
+    await addLogoToPdf(doc, doc.lastAutoTable.finalY + 80);
+    doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
+  } catch (error) {
+    console.error('Error al generar el PDF:', error);
+    doc.save(`informe_oficial_${report.employee.fiscal_name}_${startDate}.pdf`);
+  }
+};
+
+// Ejecutar la generación del PDF
+generatePdf();
+
       const exportData = reports.map(report => ({
         'Nombre': report.employee.fiscal_name,
         'Email': report.employee.email,
