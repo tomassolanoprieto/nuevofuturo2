@@ -4,7 +4,7 @@ import { Download, Search, FileText, AlertTriangle } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
-import logo from '../lib/AF_NF_rgb.png';
+import logo from '../lib/AF_NF_rgb.fw.png';
 
 interface DailyReport {
   date: string;
