@@ -5,12 +5,15 @@ import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { toast } from 'react-hot-toast';
 
+type TimeEntryType = 'turno' | 'coordinacion' | 'formacion' | 'sustitucion' | 'otros';
+
 interface DailyReport {
   date: string;
   clock_in: string;
   clock_out: string;
   break_duration: string;
   total_hours: number;
+  time_type?: string;
 }
 
 interface SignatureData {
@@ -27,6 +30,7 @@ export default function EmployeeHistory() {
   const [totalTime, setTotalTime] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Nuevos estados para la sección de informes
   const [reportStartDate, setReportStartDate] = useState('');
   const [reportEndDate, setReportEndDate] = useState('');
   const [employeeData, setEmployeeData] = useState<any>(null);
@@ -35,6 +39,7 @@ export default function EmployeeHistory() {
   const [isSigning, setIsSigning] = useState(false);
   const signatureCanvasRef = useRef<HTMLCanvasElement>(null);
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
+  const [sendingReport, setSendingReport] = useState(false);
 
   useEffect(() => {
     fetchTimeEntries();
@@ -64,6 +69,7 @@ export default function EmployeeHistory() {
       setLoading(true);
       setError(null);
 
+      // Get employee ID from localStorage
       const employeeId = localStorage.getItem('employeeId');
       if (!employeeId) {
         throw new Error('No se encontró el ID del empleado');
@@ -100,140 +106,154 @@ export default function EmployeeHistory() {
     }
   };
 
-  const calculateTotalTime = (entries) => {
-    if (!entries || entries.length === 0) {
-      setTotalTime(0);
-      return;
+  // Reemplazar la función calculateTotalTime con esta nueva versión
+const calculateTotalTime = (entries) => {
+  if (!entries || entries.length === 0) {
+    setTotalTime(0);
+    return;
+  }
+
+  const employeeId = localStorage.getItem('employeeId');
+  if (!employeeId) {
+    setTotalTime(0);
+    return;
+  }
+
+  // Procesar las entradas usando la lógica de processTimeEntries
+  const { dailyResults } = processTimeEntries(employeeId, entries);
+
+  // Calcular el tiempo total sumando todas las horas trabajadas
+  const totalMs = dailyResults.reduce((sum, day) => {
+    if (day.hours) {
+      return sum + (day.hours * 1000 * 60 * 60); // Convertir horas a milisegundos
     }
+    return sum;
+  }, 0);
 
-    const employeeId = localStorage.getItem('employeeId');
-    if (!employeeId) {
-      setTotalTime(0);
-      return;
-    }
+  setTotalTime(totalMs);
+};
 
-    const { dailyResults } = processTimeEntries(employeeId, entries);
+// Añadir esta función al componente (puede estar fuera del componente principal)
+const processTimeEntries = (employeeId: string, timeEntries: any[]) => {
+  const employeeEntries = timeEntries
+    .filter(entry => entry.employee_id === employeeId)
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
-    const totalMs = dailyResults.reduce((sum, day) => {
-      if (day.hours) {
-        return sum + (day.hours * 1000 * 60 * 60);
-      }
-      return sum;
-    }, 0);
+  const dailyResults: any[] = [];
+  let currentEntry: any = null;
+  let pendingClockOuts: any[] = [];
 
-    setTotalTime(totalMs);
+  // Función para calcular horas trabajadas
+  const getHoursWorked = (start: string, end: string, breakMs: number) => {
+    const startTime = new Date(start).getTime();
+    const endTime = new Date(end).getTime();
+    return ((endTime - startTime) / (1000 * 60 * 60)) - (breakMs / (1000 * 60 * 60));
   };
 
-  const processTimeEntries = (employeeId: string, timeEntries: any[]) => {
-    const employeeEntries = timeEntries
-      .filter(entry => entry.employee_id === employeeId)
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  for (const entry of employeeEntries) {
+    const dateKey = entry.timestamp.split('T')[0];
+    const entryTime = new Date(entry.timestamp);
 
-    const dailyResults: any[] = [];
-    let currentEntry: any = null;
-    let pendingClockOuts: any[] = [];
+    switch (entry.entry_type) {
+      case 'clock_in':
+        // Cerrar entrada anterior si existe
+        if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
+          const endOfDay = new Date(currentEntry.date);
+          endOfDay.setHours(23, 59, 59, 999);
+          currentEntry.clockOut = endOfDay.toISOString();
+          currentEntry.hours = getHoursWorked(
+            currentEntry.clockIn,
+            currentEntry.clockOut,
+            currentEntry.breakDuration
+          );
+          dailyResults.push(currentEntry);
+        }
+        
+        // Crear nueva entrada
+        currentEntry = {
+          date: dateKey,
+          dateObj: new Date(dateKey),
+          clockIn: entry.timestamp,
+          breakDuration: 0,
+          timeType: entry.time_type,
+          clockOut: undefined,
+          hours: 0
+        };
+        break;
 
-    const getHoursWorked = (start: string, end: string, breakMs: number) => {
-      const startTime = new Date(start).getTime();
-      const endTime = new Date(end).getTime();
-      return ((endTime - startTime) / (1000 * 60 * 60)) - (breakMs / (1000 * 60 * 60));
-    };
+      case 'clock_out':
+        if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
+          // Asignar salida a entrada actual
+          currentEntry.clockOut = entry.timestamp;
+          currentEntry.hours = getHoursWorked(
+            currentEntry.clockIn,
+            currentEntry.clockOut,
+            currentEntry.breakDuration
+          );
+          dailyResults.push(currentEntry);
+          currentEntry = null;
+        } else {
+          // Guardar salida pendiente
+          pendingClockOuts.push(entry);
+        }
+        break;
 
-    for (const entry of employeeEntries) {
-      const dateKey = entry.timestamp.split('T')[0];
-      const entryTime = new Date(entry.timestamp);
+      case 'break_start':
+        if (currentEntry) {
+          currentEntry.breakStart = entry.timestamp;
+        }
+        break;
 
-      switch (entry.entry_type) {
-        case 'clock_in':
-          if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
-            const endOfDay = new Date(currentEntry.date);
-            endOfDay.setHours(23, 59, 59, 999);
-            currentEntry.clockOut = endOfDay.toISOString();
-            currentEntry.hours = getHoursWorked(
-              currentEntry.clockIn,
-              currentEntry.clockOut,
-              currentEntry.breakDuration
-            );
-            dailyResults.push(currentEntry);
-          }
-          
-          currentEntry = {
-            date: dateKey,
-            dateObj: new Date(dateKey),
-            clockIn: entry.timestamp,
-            breakDuration: 0,
-            clockOut: undefined,
-            hours: 0
-          };
-          break;
-
-        case 'clock_out':
-          if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
-            currentEntry.clockOut = entry.timestamp;
-            currentEntry.hours = getHoursWorked(
-              currentEntry.clockIn,
-              currentEntry.clockOut,
-              currentEntry.breakDuration
-            );
-            dailyResults.push(currentEntry);
-            currentEntry = null;
-          } else {
-            pendingClockOuts.push(entry);
-          }
-          break;
-
-        case 'break_start':
-          if (currentEntry) {
-            currentEntry.breakStart = entry.timestamp;
-          }
-          break;
-
-        case 'break_end':
-          if (currentEntry && currentEntry.breakStart) {
-            const breakStart = new Date(currentEntry.breakStart).getTime();
-            const breakEnd = entryTime.getTime();
-            currentEntry.breakDuration += (breakEnd - breakStart);
-            currentEntry.breakStart = undefined;
-          }
-          break;
-      }
+      case 'break_end':
+        if (currentEntry && currentEntry.breakStart) {
+          const breakStart = new Date(currentEntry.breakStart).getTime();
+          const breakEnd = entryTime.getTime();
+          currentEntry.breakDuration += (breakEnd - breakStart);
+          currentEntry.breakStart = undefined;
+        }
+        break;
     }
+  }
 
-    if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
-      const endOfDay = new Date(currentEntry.date);
-      endOfDay.setHours(23, 59, 59, 999);
-      currentEntry.clockOut = endOfDay.toISOString();
-      currentEntry.hours = getHoursWorked(
-        currentEntry.clockIn,
-        currentEntry.clockOut,
-        currentEntry.breakDuration
-      );
-      dailyResults.push(currentEntry);
-    }
+  // Procesar entrada pendiente final
+  if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
+    const endOfDay = new Date(currentEntry.date);
+    endOfDay.setHours(23, 59, 59, 999);
+    currentEntry.clockOut = endOfDay.toISOString();
+    currentEntry.hours = getHoursWorked(
+      currentEntry.clockIn,
+      currentEntry.clockOut,
+      currentEntry.breakDuration
+    );
+    dailyResults.push(currentEntry);
+  }
 
-    pendingClockOuts.forEach(clockOut => {
-      dailyResults.push({
-        date: clockOut.timestamp.split('T')[0],
-        dateObj: new Date(clockOut.timestamp.split('T')[0]),
-        clockIn: undefined,
-        clockOut: clockOut.timestamp,
-        breakDuration: 0,
-        hours: 0
-      });
+  // Procesar salidas pendientes (sin entrada correspondiente)
+  pendingClockOuts.forEach(clockOut => {
+    dailyResults.push({
+      date: clockOut.timestamp.split('T')[0],
+      dateObj: new Date(clockOut.timestamp.split('T')[0]),
+      clockIn: undefined,
+      clockOut: clockOut.timestamp,
+      breakDuration: 0,
+      hours: 0,
+      timeType: clockOut.time_type
     });
+  });
 
-    const entriesByDate = employeeEntries.reduce((acc, entry) => {
-      const date = entry.timestamp.split('T')[0];
-      if (!acc[date]) acc[date] = [];
-      acc[date].push(entry);
-      return acc;
-    }, {} as Record<string, any[]>);
+  // Agrupar entradas por fecha
+  const entriesByDate = employeeEntries.reduce((acc, entry) => {
+    const date = entry.timestamp.split('T')[0];
+    if (!acc[date]) acc[date] = [];
+    acc[date].push(entry);
+    return acc;
+  }, {} as Record<string, any[]>);
 
-    return {
-      dailyResults,
-      entriesByDate
-    };
+  return {
+    dailyResults,
+    entriesByDate
   };
+};
 
   const filterToday = () => {
     const today = new Date();
@@ -276,6 +296,17 @@ export default function EmployeeHistory() {
       case 'break_end': return 'Fin Pausa';
       case 'clock_out': return 'Salida';
       default: return type;
+    }
+  };
+
+  const getTimeTypeText = (type: TimeEntryType | null) => {
+    switch (type) {
+      case 'turno': return 'Fichaje de turno';
+      case 'coordinacion': return 'Fichaje de coordinación';
+      case 'formacion': return 'Fichaje de formación';
+      case 'sustitucion': return 'Fichaje de horas de sustitución';
+      case 'otros': return 'Otros';
+      default: return '';
     }
   };
 
@@ -363,8 +394,11 @@ export default function EmployeeHistory() {
 
   const sendEmailWithReport = async (pdfBlob: Blob) => {
     try {
+      setSendingReport(true);
       const employeeId = localStorage.getItem('employeeId');
-      if (!employeeId || !employeeData) return;
+      if (!employeeId || !employeeData) {
+        throw new Error('No se encontraron datos del empleado');
+      }
 
       // Convertir blob a base64
       const reader = new FileReader();
@@ -395,28 +429,32 @@ export default function EmployeeHistory() {
               })
             });
 
-            const result = await response.json();
-
             if (!response.ok) {
-              throw new Error(result.error || 'Error al enviar el informe');
+              const errorData = await response.json();
+              throw new Error(errorData.error || 'Error al enviar el informe');
             }
 
-            toast.success(result.message || 'Informe firmado enviado por correo electrónico');
+            const result = await response.json();
+            toast.success('Informe firmado enviado por correo electrónico');
             resolve(result);
           } catch (err) {
             console.error('Error sending report:', err);
             toast.error('Error al enviar el informe por correo');
             reject(err);
+          } finally {
+            setSendingReport(false);
           }
         };
         
         reader.onerror = () => {
+          setSendingReport(false);
           reject(new Error('Error al leer el archivo PDF'));
         };
       });
     } catch (err) {
       console.error('Error sending report:', err);
       toast.error('Error al enviar el informe por correo');
+      setSendingReport(false);
       throw err;
     }
   };
@@ -428,6 +466,7 @@ export default function EmployeeHistory() {
     }
 
     try {
+      setLoading(true);
       const employeeId = localStorage.getItem('employeeId');
       if (!employeeId) {
         throw new Error('No se encontró el ID del empleado');
@@ -484,7 +523,8 @@ export default function EmployeeHistory() {
             }) : '',
             break_duration: existingDay.breakDuration > 0 ? 
               `${Math.floor(existingDay.breakDuration / (1000 * 60 * 60))}:${Math.floor((existingDay.breakDuration % (1000 * 60 * 60)) / (1000 * 60)).toString().padStart(2, '0')}` : '',
-            total_hours: existingDay.hours || 0
+            total_hours: existingDay.hours || 0,
+            time_type: existingDay.timeType
           });
         } else {
           allDays.push({
@@ -502,7 +542,7 @@ export default function EmployeeHistory() {
         }
       }
 
-            // Generar PDF
+      // Generar PDF
       const doc = new jsPDF();
 
       // Título
@@ -512,8 +552,8 @@ export default function EmployeeHistory() {
       // Información de la empresa y empleado
       doc.setFontSize(10);
       const tableData = [
-        ['Empresa: Asociación Centro Trama', `Trabajador: ${employeeData.fiscal_name || ''}`],
-        ['C.I.F/N.I.F: G80054760', `N.I.F: ${employeeData.document_number || ''}`],
+        ['Empresa: NUEVO FUTURO', `Trabajador: ${employeeData.fiscal_name || ''}`],
+        ['C.I.F/N.I.F: G28309862', `N.I.F: ${employeeData.document_number || ''}`],
         [`Centro de Trabajo: ${employeeData.work_centers?.join(', ') || ''}`],
         ['C.C.C:', `Mes y Año: ${new Date(reportStartDate).toLocaleDateString('es-ES', { month: '2-digit', year: 'numeric' })}`]
       ];
@@ -541,12 +581,13 @@ export default function EmployeeHistory() {
         day.break_duration,
         day.total_hours ? 
           `${Math.floor(day.total_hours)}:${Math.round((day.total_hours % 1) * 60).toString().padStart(2, '0')}` : 
-          '0:00'
+          '0:00',
+        day.time_type || ''
       ]);
 
       doc.autoTable({
         startY: doc.lastAutoTable.finalY + 10,
-        head: [['DIA', 'ENTRADA', 'SALIDA', 'PAUSAS', 'HORAS ORDINARIAS']],
+        head: [['DIA', 'ENTRADA', 'SALIDA', 'PAUSAS', 'HORAS ORDINARIAS', 'TIPO']],
         body: recordsData,
         theme: 'grid',
         styles: {
@@ -555,11 +596,12 @@ export default function EmployeeHistory() {
           halign: 'center'
         },
         columnStyles: {
-          0: { cellWidth: 50 },
-          1: { cellWidth: 35 },
-          2: { cellWidth: 35 },
-          3: { cellWidth: 35 },
-          4: { cellWidth: 35 }
+          0: { cellWidth: 40 },
+          1: { cellWidth: 30 },
+          2: { cellWidth: 30 },
+          3: { cellWidth: 30 },
+          4: { cellWidth: 30 },
+          5: { cellWidth: 30 }
         }
       });
 
@@ -572,7 +614,7 @@ export default function EmployeeHistory() {
       doc.autoTable({
         startY: doc.lastAutoTable.finalY,
         head: [],
-        body: [['TOTAL HORAS', '', '', '', totalFormatted]],
+        body: [['TOTAL HORAS', '', '', '', totalFormatted, '']],
         theme: 'grid',
         styles: {
           cellPadding: 2,
@@ -581,11 +623,12 @@ export default function EmployeeHistory() {
           fontStyle: 'bold'
         },
         columnStyles: {
-          0: { cellWidth: 50 },
-          1: { cellWidth: 35 },
-          2: { cellWidth: 35 },
-          3: { cellWidth: 35 },
-          4: { cellWidth: 35 }
+          0: { cellWidth: 40 },
+          1: { cellWidth: 30 },
+          2: { cellWidth: 30 },
+          3: { cellWidth: 30 },
+          4: { cellWidth: 30 },
+          5: { cellWidth: 30 }
         }
       });
 
@@ -625,6 +668,8 @@ export default function EmployeeHistory() {
     } catch (err) {
       console.error('Error generating signed report:', err);
       toast.error('Error al generar el informe firmado');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -673,16 +718,13 @@ export default function EmployeeHistory() {
 
   const generateUnsignedReport = async () => {
     try {
+      setLoading(true);
       const employeeId = localStorage.getItem('employeeId');
       if (!employeeId) {
         throw new Error('No se encontró el ID del empleado');
       }
 
-      if (!employeeData) {
-        throw new Error('No se encontraron los datos del empleado');
-      }
-
-      // Obtener registros de tiempo
+      // Obtener los registros del empleado en el rango de fechas
       const { data: timeEntries, error } = await supabase
         .from('time_entries')
         .select('*')
@@ -693,25 +735,28 @@ export default function EmployeeHistory() {
 
       if (error) throw error;
 
-      // Procesar entradas
+      // Procesar las entradas usando la función mejorada
       const { dailyResults } = processTimeEntries(employeeId, timeEntries || []);
 
-      // Crear array con todos los días en el rango
+      // Crear un array con todos los días en el rango
       const startDate = new Date(reportStartDate);
       const endDate = new Date(reportEndDate);
       const allDays: DailyReport[] = [];
       
+      // Agrupar los resultados por fecha para facilitar la búsqueda
       const resultsByDate: Record<string, any> = {};
       dailyResults.forEach(day => {
         const dateKey = day.dateObj.toISOString().split('T')[0];
         resultsByDate[dateKey] = day;
       });
 
+      // Iterar día por día en el rango
       for (let date = new Date(startDate); date <= endDate; date.setDate(date.getDate() + 1)) {
         const dateKey = date.toISOString().split('T')[0];
         const existingDay = resultsByDate[dateKey];
         
         if (existingDay) {
+          // Si hay registros para este día, usarlos
           allDays.push({
             date: existingDay.dateObj.toLocaleDateString('es-ES', {
               weekday: 'long',
@@ -729,9 +774,11 @@ export default function EmployeeHistory() {
             }) : '',
             break_duration: existingDay.breakDuration > 0 ? 
               `${Math.floor(existingDay.breakDuration / (1000 * 60 * 60))}:${Math.floor((existingDay.breakDuration % (1000 * 60 * 60)) / (1000 * 60)).toString().padStart(2, '0')}` : '',
-            total_hours: existingDay.hours || 0
+            total_hours: existingDay.hours || 0,
+            time_type: existingDay.timeType
           });
         } else {
+          // Si no hay registros, crear un día vacío
           allDays.push({
             date: new Date(date).toLocaleDateString('es-ES', {
               weekday: 'long',
@@ -747,19 +794,19 @@ export default function EmployeeHistory() {
         }
       }
 
-      // Generar PDF sin firma
+      // Generar el PDF
       const doc = new jsPDF();
 
-      // Título
+      // Title
       doc.setFontSize(14);
       doc.text('Listado mensual del registro de jornada', 105, 20, { align: 'center' });
 
-      // Información de la empresa y empleado
+      // Company and employee information
       doc.setFontSize(10);
       const tableData = [
-        ['Empresa: NUEVO FUTURO', `Trabajador: ${employeeData.fiscal_name || ''}`],
-        ['C.I.F/N.I.F: G28309862', `N.I.F: ${employeeData.document_number || ''}`],
-        [`Centro de Trabajo: ${employeeData.work_centers?.join(', ') || ''}`],
+        ['Empresa: NUEVO FUTURO', `Trabajador: ${employeeData?.fiscal_name || ''}`],
+        ['C.I.F/N.I.F: G28309862', `N.I.F: ${employeeData?.document_number || ''}`],
+        [`Centro de Trabajo: ${employeeData?.work_centers?.join(', ') || ''}`],
         ['C.C.C:', `Mes y Año: ${new Date(reportStartDate).toLocaleDateString('es-ES', { month: '2-digit', year: 'numeric' })}`]
       ];
 
@@ -778,7 +825,7 @@ export default function EmployeeHistory() {
         }
       });
 
-      // Registros diarios
+      // Daily records
       const recordsData = allDays.map(day => [
         day.date,
         day.clock_in,
@@ -786,12 +833,13 @@ export default function EmployeeHistory() {
         day.break_duration,
         day.total_hours ? 
           `${Math.floor(day.total_hours)}:${Math.round((day.total_hours % 1) * 60).toString().padStart(2, '0')}` : 
-          '0:00'
+          '0:00',
+        day.time_type || ''
       ]);
 
       doc.autoTable({
         startY: doc.lastAutoTable.finalY + 10,
-        head: [['DIA', 'ENTRADA', 'SALIDA', 'PAUSAS', 'HORAS ORDINARIAS']],
+        head: [['DIA', 'ENTRADA', 'SALIDA', 'PAUSAS', 'HORAS ORDINARIAS', 'TIPO']],
         body: recordsData,
         theme: 'grid',
         styles: {
@@ -800,15 +848,16 @@ export default function EmployeeHistory() {
           halign: 'center'
         },
         columnStyles: {
-          0: { cellWidth: 50 },
-          1: { cellWidth: 35 },
-          2: { cellWidth: 35 },
-          3: { cellWidth: 35 },
-          4: { cellWidth: 35 }
+          0: { cellWidth: 40 },
+          1: { cellWidth: 30 },
+          2: { cellWidth: 30 },
+          3: { cellWidth: 30 },
+          4: { cellWidth: 30 },
+          5: { cellWidth: 30 }
         }
       });
 
-      // Total horas
+      // Total hours (solo sumar días con horas trabajadas)
       const totalHours = allDays.reduce((acc, day) => acc + (day.total_hours || 0), 0);
       const hours = Math.floor(totalHours);
       const minutes = Math.round((totalHours % 1) * 60);
@@ -817,7 +866,7 @@ export default function EmployeeHistory() {
       doc.autoTable({
         startY: doc.lastAutoTable.finalY,
         head: [],
-        body: [['TOTAL HORAS', '', '', '', totalFormatted]],
+        body: [['TOTAL HORAS', '', '', '', totalFormatted, '']],
         theme: 'grid',
         styles: {
           cellPadding: 2,
@@ -826,19 +875,21 @@ export default function EmployeeHistory() {
           fontStyle: 'bold'
         },
         columnStyles: {
-          0: { cellWidth: 50 },
-          1: { cellWidth: 35 },
-          2: { cellWidth: 35 },
-          3: { cellWidth: 35 },
-          4: { cellWidth: 35 }
+          0: { cellWidth: 40 },
+          1: { cellWidth: 30 },
+          2: { cellWidth: 30 },
+          3: { cellWidth: 30 },
+          4: { cellWidth: 30 },
+          5: { cellWidth: 30 }
         }
       });
 
-      // Firmas
+      // Signatures
       doc.setFontSize(10);
       doc.text('Firma de la Empresa:', 40, doc.lastAutoTable.finalY + 30);
       doc.text('Firma del Trabajador:', 140, doc.lastAutoTable.finalY + 30);
 
+      // Place and date
       doc.setFontSize(8);
       doc.text(`En Madrid, a ${new Date().toLocaleDateString('es-ES', { 
         weekday: 'long',
@@ -847,7 +898,7 @@ export default function EmployeeHistory() {
         year: 'numeric'
       })}`, 14, doc.lastAutoTable.finalY + 60);
 
-      // Nota legal
+      // Legal note
       doc.setFontSize(6);
       const legalText = 'Registro realizado en cumplimiento del Real Decreto-ley 8/2019, de 8 de marzo, de medidas urgentes de protección social y de lucha contra la precariedad laboral en la jornada de trabajo ("BOE" núm. 61 de 12 de marzo), la regulación de forma expresa en el artículo 34 del texto refundido de la Ley del Estatuto de los Trabajadores (ET), la obligación de las empresas de registrar diariamente la jornada laboral.';
       doc.text(legalText, 14, doc.lastAutoTable.finalY + 70, {
@@ -855,12 +906,14 @@ export default function EmployeeHistory() {
         align: 'justify'
       });
 
-      // Descargar localmente
-      doc.save(`informe_oficial_${employeeData.fiscal_name || 'empleado'}_${reportStartDate}_${reportEndDate}.pdf`);
+      doc.save(`informe_oficial_${employeeData?.fiscal_name || 'empleado'}_${reportStartDate}.pdf`);
+      toast.success('Informe generado correctamente');
 
     } catch (err) {
-      console.error('Error generating unsigned report:', err);
-      toast.error('Error al generar el informe');
+      console.error('Error generating official report:', err);
+      toast.error('Error al generar el informe oficial');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -940,7 +993,10 @@ export default function EmployeeHistory() {
                 <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Tipo
                 </th>
-                                <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Tipo de Fichaje
+                </th>
+                <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Centro de Trabajo
                 </th>
               </tr>
@@ -948,13 +1004,13 @@ export default function EmployeeHistory() {
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={4} className="px-6 py-4 text-center">
+                  <td colSpan={5} className="px-6 py-4 text-center">
                     Cargando fichajes...
                   </td>
                 </tr>
               ) : entries.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-6 py-4 text-center">
+                  <td colSpan={5} className="px-6 py-4 text-center">
                     No hay fichajes para mostrar
                   </td>
                 </tr>
@@ -969,6 +1025,9 @@ export default function EmployeeHistory() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       {getEntryTypeText(entry.entry_type)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {entry.entry_type === 'clock_in' ? getTimeTypeText(entry.time_type) : ''}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       {entry.work_center || ''}
@@ -1020,13 +1079,25 @@ export default function EmployeeHistory() {
               </div>
             </div>
             
-            <button
-              onClick={generateOfficialReport}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-            >
-              <Download className="w-5 h-5" />
-              Generar PDF
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={generateOfficialReport}
+                disabled={loading || sendingReport}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+              >
+                <Download className="w-5 h-5" />
+                {loading || sendingReport ? 'Procesando...' : 'Generar PDF'}
+              </button>
+              
+              <button
+                onClick={() => setShowSignatureModal(true)}
+                disabled={loading || sendingReport}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+              >
+                <PenTool className="w-5 h-5" />
+                Firmar y Enviar
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1076,10 +1147,11 @@ export default function EmployeeHistory() {
               
               <button
                 onClick={saveSignature}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                disabled={sendingReport}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
               >
                 <Check className="w-5 h-5" />
-                Confirmar Firma
+                {sendingReport ? 'Procesando...' : 'Confirmar Firma'}
               </button>
             </div>
           </div>
