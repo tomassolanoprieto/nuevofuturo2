@@ -41,7 +41,7 @@ function Overview() {
     timestamp: '',
     entry_type: 'clock_in',
     time_type: 'turno' as TimeEntryType,
-    work_center: '',
+    work_center: null as string | null,
   });
   const [error, setError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(0);
@@ -390,6 +390,11 @@ function Overview() {
       const employeeId = selectedEmployee?.employee.id;
       const entryDate = new Date(newEntry.timestamp).toISOString();
 
+      // Validate work center selection
+      if (!newEntry.work_center) {
+        throw new Error('Debe seleccionar un centro de trabajo');
+      }
+
       if (newEntry.entry_type !== 'clock_in') {
         const { data: activeEntries, error: fetchError } = await supabase
           .from('time_entries')
@@ -432,7 +437,7 @@ function Overview() {
         timestamp: '',
         entry_type: 'clock_in',
         time_type: 'turno',
-        work_center: selectedEmployee.employee.work_centers[0],
+        work_center: selectedEmployee?.employee?.work_centers?.[0] || null,
       });
 
     } catch (err) {
@@ -445,6 +450,11 @@ function Overview() {
     try {
       const employeeId = selectedEmployee?.employee.id;
       const newTimestamp = new Date(editingEntry?.timestamp).toISOString();
+
+      // Validate work center selection
+      if (!editingEntry?.work_center) {
+        throw new Error('Debe seleccionar un centro de trabajo');
+      }
 
       if (editingEntry?.entry_type === 'clock_out') {
         const originalEntry = await findOriginalEntry(
@@ -786,7 +796,17 @@ function Overview() {
                     <div className="flex justify-between items-center mb-4">
                       <h3 className="text-lg font-medium">Registro de Fichajes</h3>
                       <button
-                        onClick={() => setShowEditModal(true)}
+                        onClick={() => {
+                          // Initialize newEntry with first work center if available
+                          const firstWorkCenter = selectedEmployee?.employee?.work_centers?.[0] || null;
+                          setNewEntry({
+                            timestamp: '',
+                            entry_type: 'clock_in',
+                            time_type: 'turno',
+                            work_center: firstWorkCenter,
+                          });
+                          setShowEditModal(true);
+                        }}
                         className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                       >
                         <Plus className="w-4 h-4" />
@@ -879,7 +899,7 @@ function Overview() {
                                             .slice(0, 16),
                                           entry_type: entry.entry_type,
                                           time_type: entry.time_type,
-                                          work_center: entry.work_center,
+                                          work_center: entry.work_center || selectedEmployee?.employee?.work_centers?.[0] || null,
                                           original_timestamp: entry.original_timestamp,
                                         });
                                         setShowEditModal(true);
@@ -968,7 +988,7 @@ function Overview() {
                         timestamp: '',
                         entry_type: 'clock_in',
                         time_type: 'turno',
-                        work_center: selectedEmployee.employee.work_centers[0],
+                        work_center: selectedEmployee?.employee?.work_centers?.[0] || null,
                       });
                     }}
                     className="text-gray-500 hover:text-gray-700"
@@ -1085,26 +1105,33 @@ function Overview() {
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Centro de Trabajo
+                      Centro de Trabajo *
                     </label>
                     <select
-                      value={editingEntry ? editingEntry.work_center : newEntry.work_center}
+                      value={editingEntry ? (editingEntry.work_center || '') : (newEntry.work_center || '')}
                       onChange={(e) => {
+                        const value = e.target.value || null;
                         if (editingEntry) {
-                          setEditingEntry({ ...editingEntry, work_center: e.target.value });
+                          setEditingEntry({ ...editingEntry, work_center: value });
                         } else {
-                          setNewEntry({ ...newEntry, work_center: e.target.value });
+                          setNewEntry({ ...newEntry, work_center: value });
                         }
                       }}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       required
                     >
-                      {selectedEmployee.employee.work_centers.map((center: string) => (
+                      <option value="">Seleccionar centro de trabajo</option>
+                      {selectedEmployee.employee.work_centers?.map((center: string) => (
                         <option key={center} value={center}>
                           {center}
                         </option>
                       ))}
                     </select>
+                    {(!selectedEmployee.employee.work_centers || selectedEmployee.employee.work_centers.length === 0) && (
+                      <p className="mt-1 text-sm text-red-600">
+                        Este empleado no tiene centros de trabajo asignados
+                      </p>
+                    )}
                   </div>
 
                   {editingEntry?.entry_type === 'clock_out' && (
@@ -1124,7 +1151,7 @@ function Overview() {
                           timestamp: '',
                           entry_type: 'clock_in',
                           time_type: 'turno',
-                          work_center: selectedEmployee.employee.work_centers[0],
+                          work_center: selectedEmployee?.employee?.work_centers?.[0] || null,
                         });
                       }}
                       className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
@@ -1133,7 +1160,8 @@ function Overview() {
                     </button>
                     <button
                       type="submit"
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                      disabled={!selectedEmployee.employee.work_centers || selectedEmployee.employee.work_centers.length === 0}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
                     >
                       {editingEntry ? 'Guardar Cambios' : 'Añadir Fichaje'}
                     </button>
