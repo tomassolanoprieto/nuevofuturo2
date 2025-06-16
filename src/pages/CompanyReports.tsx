@@ -228,7 +228,7 @@ export default function CompanyReports() {
       .select('*')
       .eq('date', dateKey)
       .eq('work_center', workCenter)
-      .single();
+      .maybeSingle();
 
     if (holiday) {
       isHoliday = true;
