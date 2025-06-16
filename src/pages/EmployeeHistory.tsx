@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Calendar, Download, FileText, PenTool, X, Check } from 'lucide-react';
+import { Calendar, Download, FileText, Send } from 'lucide-react';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
-import { toast } from 'react-hot-toast';
 
 type TimeEntryType = 'turno' | 'coordinacion' | 'formacion' | 'sustitucion' | 'otros';
 
@@ -13,14 +12,6 @@ interface DailyReport {
   clock_out: string;
   break_duration: string;
   total_hours: number;
-  time_type?: string;
-}
-
-interface SignatureData {
-  x: number;
-  y: number;
-  time: number;
-  pressure: number;
 }
 
 export default function EmployeeHistory() {
@@ -34,12 +25,8 @@ export default function EmployeeHistory() {
   const [reportStartDate, setReportStartDate] = useState('');
   const [reportEndDate, setReportEndDate] = useState('');
   const [employeeData, setEmployeeData] = useState<any>(null);
-  const [showSignatureModal, setShowSignatureModal] = useState(false);
-  const [signature, setSignature] = useState<SignatureData[]>([]);
-  const [isSigning, setIsSigning] = useState(false);
-  const signatureCanvasRef = useRef<HTMLCanvasElement>(null);
-  const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
-  const [sendingReport, setSendingReport] = useState(false);
+  const [signingInProgress, setSigningInProgress] = useState(false);
+  const [signSuccess, setSignSuccess] = useState(false);
 
   useEffect(() => {
     fetchTimeEntries();
@@ -310,415 +297,13 @@ const processTimeEntries = (employeeId: string, timeEntries: any[]) => {
     }
   };
 
-  // Funciones para manejar la firma
-  const startSignature = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!signatureCanvasRef.current) return;
-    
-    const canvas = signatureCanvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    
-    setIsSigning(true);
-    
-    let x, y;
-    if ('touches' in e) {
-      x = e.touches[0].clientX - rect.left;
-      y = e.touches[0].clientY - rect.top;
-    } else {
-      x = e.clientX - rect.left;
-      y = e.clientY - rect.top;
-    }
-    
-    setSignature([{ x, y, time: Date.now(), pressure: 0.5 }]);
-    
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 2;
-    }
-  };
-
-  const drawSignature = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isSigning || !signatureCanvasRef.current) return;
-    
-    const canvas = signatureCanvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const ctx = canvas.getContext('2d');
-    
-    let x, y;
-    if ('touches' in e) {
-      e.preventDefault();
-      x = e.touches[0].clientX - rect.left;
-      y = e.touches[0].clientY - rect.top;
-    } else {
-      x = e.clientX - rect.left;
-      y = e.clientY - rect.top;
-    }
-    
-    const newPoint = { x, y, time: Date.now(), pressure: 0.5 };
-    setSignature(prev => [...prev, newPoint]);
-    
-    if (ctx) {
-      ctx.lineTo(x, y);
-      ctx.stroke();
-    }
-  };
-
-  const endSignature = () => {
-    setIsSigning(false);
-    if (signatureCanvasRef.current) {
-      setSignatureDataUrl(signatureCanvasRef.current.toDataURL('image/png'));
-    }
-  };
-
-  const clearSignature = () => {
-    setSignature([]);
-    setSignatureDataUrl(null);
-    if (signatureCanvasRef.current) {
-      const ctx = signatureCanvasRef.current.getContext('2d');
-      if (ctx) {
-        ctx.clearRect(0, 0, signatureCanvasRef.current.width, signatureCanvasRef.current.height);
-      }
-    }
-  };
-
-  const saveSignature = () => {
-    if (signature.length === 0) {
-      toast.error('Por favor, firma antes de continuar');
-      return;
-    }
-    setShowSignatureModal(false);
-    generateSignedReport();
-  };
-
-  const sendEmailWithReport = async (pdfBlob: Blob) => {
-    try {
-      setSendingReport(true);
-      const employeeId = localStorage.getItem('employeeId');
-      if (!employeeId || !employeeData) {
-        throw new Error('No se encontraron datos del empleado');
-      }
-
-      // Convertir blob a base64
-      const reader = new FileReader();
-      reader.readAsDataURL(pdfBlob);
-      
-      return new Promise((resolve, reject) => {
-        reader.onload = async () => {
-          try {
-            const base64Data = reader.result as string;
-            
-            // Llamar a la función edge para manejar la subida y notificación por email
-            const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-signed-report`;
-            const headers = {
-              'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-              'Content-Type': 'application/json',
-            };
-
-            const response = await fetch(apiUrl, {
-              method: 'POST',
-              headers,
-              body: JSON.stringify({
-                pdfBase64: base64Data,
-                employeeId: employeeId,
-                employeeName: employeeData.fiscal_name || '',
-                employeeEmail: employeeData.email,
-                reportStartDate: reportStartDate,
-                reportEndDate: reportEndDate
-              })
-            });
-
-            if (!response.ok) {
-              const errorData = await response.json();
-              throw new Error(errorData.error || 'Error al enviar el informe');
-            }
-
-            const result = await response.json();
-            toast.success('Informe firmado enviado por correo electrónico');
-            resolve(result);
-          } catch (err) {
-            console.error('Error sending report:', err);
-            toast.error('Error al enviar el informe por correo');
-            reject(err);
-          } finally {
-            setSendingReport(false);
-          }
-        };
-        
-        reader.onerror = () => {
-          setSendingReport(false);
-          reject(new Error('Error al leer el archivo PDF'));
-        };
-      });
-    } catch (err) {
-      console.error('Error sending report:', err);
-      toast.error('Error al enviar el informe por correo');
-      setSendingReport(false);
-      throw err;
-    }
-  };
-
-  const generateSignedReport = async () => {
-    if (!reportStartDate || !reportEndDate) {
-      toast.error('Por favor seleccione el rango de fechas para el informe');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const employeeId = localStorage.getItem('employeeId');
-      if (!employeeId) {
-        throw new Error('No se encontró el ID del empleado');
-      }
-
-      if (!employeeData) {
-        throw new Error('No se encontraron los datos del empleado');
-      }
-
-      // Obtener registros de tiempo
-      const { data: timeEntries, error } = await supabase
-        .from('time_entries')
-        .select('*')
-        .eq('employee_id', employeeId)
-        .gte('timestamp', new Date(reportStartDate).toISOString())
-        .lte('timestamp', new Date(reportEndDate + 'T23:59:59.999Z').toISOString())
-        .order('timestamp', { ascending: true });
-
-      if (error) throw error;
-
-      // Procesar entradas
-      const { dailyResults } = processTimeEntries(employeeId, timeEntries || []);
-
-      // Crear array con todos los días en el rango
-      const startDate = new Date(reportStartDate);
-      const endDate = new Date(reportEndDate);
-      const allDays: DailyReport[] = [];
-      
-      const resultsByDate: Record<string, any> = {};
-      dailyResults.forEach(day => {
-        const dateKey = day.dateObj.toISOString().split('T')[0];
-        resultsByDate[dateKey] = day;
-      });
-
-      for (let date = new Date(startDate); date <= endDate; date.setDate(date.getDate() + 1)) {
-        const dateKey = date.toISOString().split('T')[0];
-        const existingDay = resultsByDate[dateKey];
-        
-        if (existingDay) {
-          allDays.push({
-            date: existingDay.dateObj.toLocaleDateString('es-ES', {
-              weekday: 'long',
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit'
-            }),
-            clock_in: existingDay.clockIn ? new Date(existingDay.clockIn).toLocaleTimeString('es-ES', { 
-              hour: '2-digit', 
-              minute: '2-digit' 
-            }) : '',
-            clock_out: existingDay.clockOut ? new Date(existingDay.clockOut).toLocaleTimeString('es-ES', { 
-              hour: '2-digit', 
-              minute: '2-digit' 
-            }) : '',
-            break_duration: existingDay.breakDuration > 0 ? 
-              `${Math.floor(existingDay.breakDuration / (1000 * 60 * 60))}:${Math.floor((existingDay.breakDuration % (1000 * 60 * 60)) / (1000 * 60)).toString().padStart(2, '0')}` : '',
-            total_hours: existingDay.hours || 0,
-            time_type: existingDay.timeType
-          });
-        } else {
-          allDays.push({
-            date: new Date(date).toLocaleDateString('es-ES', {
-              weekday: 'long',
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit'
-            }),
-            clock_in: '',
-            clock_out: '',
-            break_duration: '',
-            total_hours: 0
-          });
-        }
-      }
-
-      // Generar PDF
-      const doc = new jsPDF();
-
-      // Título
-      doc.setFontSize(14);
-      doc.text('Listado mensual del registro de jornada', 105, 20, { align: 'center' });
-
-      // Información de la empresa y empleado
-      doc.setFontSize(10);
-      const tableData = [
-        ['Empresa: NUEVO FUTURO', `Trabajador: ${employeeData.fiscal_name || ''}`],
-        ['C.I.F/N.I.F: G28309862', `N.I.F: ${employeeData.document_number || ''}`],
-        [`Centro de Trabajo: ${employeeData.work_centers?.join(', ') || ''}`],
-        ['C.C.C:', `Mes y Año: ${new Date(reportStartDate).toLocaleDateString('es-ES', { month: '2-digit', year: 'numeric' })}`]
-      ];
-
-      doc.autoTable({
-        startY: 30,
-        head: [],
-        body: tableData,
-        theme: 'plain',
-        styles: {
-          cellPadding: 2,
-          fontSize: 10
-        },
-        columnStyles: {
-          0: { cellWidth: 95 },
-          1: { cellWidth: 95 }
-        }
-      });
-
-      // Registros diarios
-      const recordsData = allDays.map(day => [
-        day.date,
-        day.clock_in,
-        day.clock_out,
-        day.break_duration,
-        day.total_hours ? 
-          `${Math.floor(day.total_hours)}:${Math.round((day.total_hours % 1) * 60).toString().padStart(2, '0')}` : 
-          '0:00',
-        day.time_type || ''
-      ]);
-
-      doc.autoTable({
-        startY: doc.lastAutoTable.finalY + 10,
-        head: [['DIA', 'ENTRADA', 'SALIDA', 'PAUSAS', 'HORAS ORDINARIAS', 'TIPO']],
-        body: recordsData,
-        theme: 'grid',
-        styles: {
-          cellPadding: 2,
-          fontSize: 8,
-          halign: 'center'
-        },
-        columnStyles: {
-          0: { cellWidth: 40 },
-          1: { cellWidth: 30 },
-          2: { cellWidth: 30 },
-          3: { cellWidth: 30 },
-          4: { cellWidth: 30 },
-          5: { cellWidth: 30 }
-        }
-      });
-
-      // Total horas
-      const totalHours = allDays.reduce((acc, day) => acc + (day.total_hours || 0), 0);
-      const hours = Math.floor(totalHours);
-      const minutes = Math.round((totalHours % 1) * 60);
-      const totalFormatted = `${hours}:${minutes.toString().padStart(2, '0')}`;
-
-      doc.autoTable({
-        startY: doc.lastAutoTable.finalY,
-        head: [],
-        body: [['TOTAL HORAS', '', '', '', totalFormatted, '']],
-        theme: 'grid',
-        styles: {
-          cellPadding: 2,
-          fontSize: 8,
-          halign: 'center',
-          fontStyle: 'bold'
-        },
-        columnStyles: {
-          0: { cellWidth: 40 },
-          1: { cellWidth: 30 },
-          2: { cellWidth: 30 },
-          3: { cellWidth: 30 },
-          4: { cellWidth: 30 },
-          5: { cellWidth: 30 }
-        }
-      });
-
-      // Añadir firma al PDF si existe
-      if (signatureDataUrl) {
-        doc.addImage(signatureDataUrl, 'PNG', 140, doc.lastAutoTable.finalY + 20, 50, 20);
-      }
-
-      // Firmas y lugar/fecha
-      doc.setFontSize(10);
-      doc.text('Firma de la Empresa:', 40, doc.lastAutoTable.finalY + 30);
-      doc.text('Firma del Trabajador:', 140, doc.lastAutoTable.finalY + 30);
-
-      doc.setFontSize(8);
-      doc.text(`En Madrid, a ${new Date().toLocaleDateString('es-ES', { 
-        weekday: 'long',
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric'
-      })}`, 14, doc.lastAutoTable.finalY + 60);
-
-      // Nota legal
-      doc.setFontSize(6);
-      const legalText = 'Registro realizado en cumplimiento del Real Decreto-ley 8/2019, de 8 de marzo, de medidas urgentes de protección social y de lucha contra la precariedad laboral en la jornada de trabajo ("BOE" núm. 61 de 12 de marzo), la regulación de forma expresa en el artículo 34 del texto refundido de la Ley del Estatuto de los Trabajadores (ET), la obligación de las empresas de registrar diariamente la jornada laboral.';
-      doc.text(legalText, 14, doc.lastAutoTable.finalY + 70, {
-        maxWidth: 180,
-        align: 'justify'
-      });
-
-      // Guardar PDF y enviar por correo
-      const pdfBlob = doc.output('blob');
-      await sendEmailWithReport(pdfBlob);
-
-      // Descargar también localmente
-      doc.save(`informe_firmado_${employeeData.fiscal_name || 'empleado'}_${reportStartDate}_${reportEndDate}.pdf`);
-
-    } catch (err) {
-      console.error('Error generating signed report:', err);
-      toast.error('Error al generar el informe firmado');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const generateOfficialReport = async () => {
     if (!reportStartDate || !reportEndDate) {
-      toast.error('Por favor seleccione el rango de fechas para el informe');
+      alert('Por favor seleccione el rango de fechas para el informe');
       return;
     }
 
-    // Mostrar modal de confirmación antes de firmar
-    toast(
-      (t) => (
-        <div className="flex flex-col items-center p-4">
-          <p className="mb-4">¿Desea firmar y enviar el informe oficial?</p>
-          <div className="flex gap-2">
-            <button
-              onClick={() => {
-                setShowSignatureModal(true);
-                toast.dismiss(t.id);
-              }}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
-            >
-              Firmar y Enviar
-            </button>
-            <button
-              onClick={() => {
-                generateUnsignedReport();
-                toast.dismiss(t.id);
-              }}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              Solo Descargar
-            </button>
-            <button
-              onClick={() => toast.dismiss(t.id)}
-              className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
-            >
-              Cancelar
-            </button>
-          </div>
-        </div>
-      ),
-      { duration: 10000 }
-    );
-  };
-
-  const generateUnsignedReport = async () => {
     try {
-      setLoading(true);
       const employeeId = localStorage.getItem('employeeId');
       if (!employeeId) {
         throw new Error('No se encontró el ID del empleado');
@@ -774,8 +359,7 @@ const processTimeEntries = (employeeId: string, timeEntries: any[]) => {
             }) : '',
             break_duration: existingDay.breakDuration > 0 ? 
               `${Math.floor(existingDay.breakDuration / (1000 * 60 * 60))}:${Math.floor((existingDay.breakDuration % (1000 * 60 * 60)) / (1000 * 60)).toString().padStart(2, '0')}` : '',
-            total_hours: existingDay.hours || 0,
-            time_type: existingDay.timeType
+            total_hours: existingDay.hours || 0
           });
         } else {
           // Si no hay registros, crear un día vacío
@@ -833,13 +417,12 @@ const processTimeEntries = (employeeId: string, timeEntries: any[]) => {
         day.break_duration,
         day.total_hours ? 
           `${Math.floor(day.total_hours)}:${Math.round((day.total_hours % 1) * 60).toString().padStart(2, '0')}` : 
-          '0:00',
-        day.time_type || ''
+          '0:00'
       ]);
 
       doc.autoTable({
         startY: doc.lastAutoTable.finalY + 10,
-        head: [['DIA', 'ENTRADA', 'SALIDA', 'PAUSAS', 'HORAS ORDINARIAS', 'TIPO']],
+        head: [['DIA', 'ENTRADA', 'SALIDA', 'PAUSAS', 'HORAS ORDINARIAS']],
         body: recordsData,
         theme: 'grid',
         styles: {
@@ -848,12 +431,11 @@ const processTimeEntries = (employeeId: string, timeEntries: any[]) => {
           halign: 'center'
         },
         columnStyles: {
-          0: { cellWidth: 40 },
-          1: { cellWidth: 30 },
-          2: { cellWidth: 30 },
-          3: { cellWidth: 30 },
-          4: { cellWidth: 30 },
-          5: { cellWidth: 30 }
+          0: { cellWidth: 50 },
+          1: { cellWidth: 35 },
+          2: { cellWidth: 35 },
+          3: { cellWidth: 35 },
+          4: { cellWidth: 35 }
         }
       });
 
@@ -866,7 +448,7 @@ const processTimeEntries = (employeeId: string, timeEntries: any[]) => {
       doc.autoTable({
         startY: doc.lastAutoTable.finalY,
         head: [],
-        body: [['TOTAL HORAS', '', '', '', totalFormatted, '']],
+        body: [['TOTAL HORAS', '', '', '', totalFormatted]],
         theme: 'grid',
         styles: {
           cellPadding: 2,
@@ -875,12 +457,11 @@ const processTimeEntries = (employeeId: string, timeEntries: any[]) => {
           fontStyle: 'bold'
         },
         columnStyles: {
-          0: { cellWidth: 40 },
-          1: { cellWidth: 30 },
-          2: { cellWidth: 30 },
-          3: { cellWidth: 30 },
-          4: { cellWidth: 30 },
-          5: { cellWidth: 30 }
+          0: { cellWidth: 50 },
+          1: { cellWidth: 35 },
+          2: { cellWidth: 35 },
+          3: { cellWidth: 35 },
+          4: { cellWidth: 35 }
         }
       });
 
@@ -907,13 +488,258 @@ const processTimeEntries = (employeeId: string, timeEntries: any[]) => {
       });
 
       doc.save(`informe_oficial_${employeeData?.fiscal_name || 'empleado'}_${reportStartDate}.pdf`);
-      toast.success('Informe generado correctamente');
 
     } catch (err) {
       console.error('Error generating official report:', err);
-      toast.error('Error al generar el informe oficial');
+      alert('Error al generar el informe oficial');
+    }
+  };
+
+  const generateSignedReport = async () => {
+    if (!reportStartDate || !reportEndDate) {
+      alert('Por favor seleccione el rango de fechas para el informe');
+      return;
+    }
+
+    try {
+      setSigningInProgress(true);
+      setError(null);
+      
+      const employeeId = localStorage.getItem('employeeId');
+      if (!employeeId) {
+        throw new Error('No se encontró el ID del empleado');
+      }
+
+      // Obtener los registros del empleado en el rango de fechas
+      const { data: timeEntries, error } = await supabase
+        .from('time_entries')
+        .select('*')
+        .eq('employee_id', employeeId)
+        .gte('timestamp', new Date(reportStartDate).toISOString())
+        .lte('timestamp', new Date(reportEndDate + 'T23:59:59.999Z').toISOString())
+        .order('timestamp', { ascending: true });
+
+      if (error) throw error;
+
+      // Procesar las entradas usando la función mejorada
+      const { dailyResults } = processTimeEntries(employeeId, timeEntries || []);
+
+      // Crear un array con todos los días en el rango
+      const startDate = new Date(reportStartDate);
+      const endDate = new Date(reportEndDate);
+      const allDays: DailyReport[] = [];
+      
+      // Agrupar los resultados por fecha para facilitar la búsqueda
+      const resultsByDate: Record<string, any> = {};
+      dailyResults.forEach(day => {
+        const dateKey = day.dateObj.toISOString().split('T')[0];
+        resultsByDate[dateKey] = day;
+      });
+
+      // Iterar día por día en el rango
+      for (let date = new Date(startDate); date <= endDate; date.setDate(date.getDate() + 1)) {
+        const dateKey = date.toISOString().split('T')[0];
+        const existingDay = resultsByDate[dateKey];
+        
+        if (existingDay) {
+          // Si hay registros para este día, usarlos
+          allDays.push({
+            date: existingDay.dateObj.toLocaleDateString('es-ES', {
+              weekday: 'long',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit'
+            }),
+            clock_in: existingDay.clockIn ? new Date(existingDay.clockIn).toLocaleTimeString('es-ES', { 
+              hour: '2-digit', 
+              minute: '2-digit' 
+            }) : '',
+            clock_out: existingDay.clockOut ? new Date(existingDay.clockOut).toLocaleTimeString('es-ES', { 
+              hour: '2-digit', 
+              minute: '2-digit' 
+            }) : '',
+            break_duration: existingDay.breakDuration > 0 ? 
+              `${Math.floor(existingDay.breakDuration / (1000 * 60 * 60))}:${Math.floor((existingDay.breakDuration % (1000 * 60 * 60)) / (1000 * 60)).toString().padStart(2, '0')}` : '',
+            total_hours: existingDay.hours || 0
+          });
+        } else {
+          // Si no hay registros, crear un día vacío
+          allDays.push({
+            date: new Date(date).toLocaleDateString('es-ES', {
+              weekday: 'long',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit'
+            }),
+            clock_in: '',
+            clock_out: '',
+            break_duration: '',
+            total_hours: 0
+          });
+        }
+      }
+
+      // Generar el PDF
+      const doc = new jsPDF();
+
+      // Title
+      doc.setFontSize(14);
+      doc.text('Listado mensual del registro de jornada', 105, 20, { align: 'center' });
+
+      // Company and employee information
+      doc.setFontSize(10);
+      const tableData = [
+        ['Empresa: NUEVO FUTURO', `Trabajador: ${employeeData?.fiscal_name || ''}`],
+        ['C.I.F/N.I.F: G28309862', `N.I.F: ${employeeData?.document_number || ''}`],
+        [`Centro de Trabajo: ${employeeData?.work_centers?.join(', ') || ''}`],
+        ['C.C.C:', `Mes y Año: ${new Date(reportStartDate).toLocaleDateString('es-ES', { month: '2-digit', year: 'numeric' })}`]
+      ];
+
+      doc.autoTable({
+        startY: 30,
+        head: [],
+        body: tableData,
+        theme: 'plain',
+        styles: {
+          cellPadding: 2,
+          fontSize: 10
+        },
+        columnStyles: {
+          0: { cellWidth: 95 },
+          1: { cellWidth: 95 }
+        }
+      });
+
+      // Daily records
+      const recordsData = allDays.map(day => [
+        day.date,
+        day.clock_in,
+        day.clock_out,
+        day.break_duration,
+        day.total_hours ? 
+          `${Math.floor(day.total_hours)}:${Math.round((day.total_hours % 1) * 60).toString().padStart(2, '0')}` : 
+          '0:00'
+      ]);
+
+      doc.autoTable({
+        startY: doc.lastAutoTable.finalY + 10,
+        head: [['DIA', 'ENTRADA', 'SALIDA', 'PAUSAS', 'HORAS ORDINARIAS']],
+        body: recordsData,
+        theme: 'grid',
+        styles: {
+          cellPadding: 2,
+          fontSize: 8,
+          halign: 'center'
+        },
+        columnStyles: {
+          0: { cellWidth: 50 },
+          1: { cellWidth: 35 },
+          2: { cellWidth: 35 },
+          3: { cellWidth: 35 },
+          4: { cellWidth: 35 }
+        }
+      });
+
+      // Total hours
+      const totalHours = allDays.reduce((acc, day) => acc + (day.total_hours || 0), 0);
+      const hours = Math.floor(totalHours);
+      const minutes = Math.round((totalHours % 1) * 60);
+      const totalFormatted = `${hours}:${minutes.toString().padStart(2, '0')}`;
+
+      doc.autoTable({
+        startY: doc.lastAutoTable.finalY,
+        head: [],
+        body: [['TOTAL HORAS', '', '', '', totalFormatted]],
+        theme: 'grid',
+        styles: {
+          cellPadding: 2,
+          fontSize: 8,
+          halign: 'center',
+          fontStyle: 'bold'
+        },
+        columnStyles: {
+          0: { cellWidth: 50 },
+          1: { cellWidth: 35 },
+          2: { cellWidth: 35 },
+          3: { cellWidth: 35 },
+          4: { cellWidth: 35 }
+        }
+      });
+
+      // Signatures
+      doc.setFontSize(10);
+      doc.text('Firma de la Empresa:', 40, doc.lastAutoTable.finalY + 30);
+      doc.text('Firma del Trabajador:', 140, doc.lastAutoTable.finalY + 30);
+
+      // Place and date
+      doc.setFontSize(8);
+      doc.text(`En Madrid, a ${new Date().toLocaleDateString('es-ES', { 
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+      })}`, 14, doc.lastAutoTable.finalY + 60);
+
+      // Legal note
+      doc.setFontSize(6);
+      const legalText = 'Registro realizado en cumplimiento del Real Decreto-ley 8/2019, de 8 de marzo, de medidas urgentes de protección social y de lucha contra la precariedad laboral en la jornada de trabajo ("BOE" núm. 61 de 12 de marzo), la regulación de forma expresa en el artículo 34 del texto refundido de la Ley del Estatuto de los Trabajadores (ET), la obligación de las empresas de registrar diariamente la jornada laboral.';
+      doc.text(legalText, 14, doc.lastAutoTable.finalY + 70, {
+        maxWidth: 180,
+        align: 'justify'
+      });
+
+      // Convert PDF to base64
+      const pdfBase64 = doc.output('datauristring');
+
+      // Send to Edge Function
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const response = await fetch(`${supabaseUrl}/functions/v1/send-signed-report`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+        },
+        body: JSON.stringify({
+          pdfBase64,
+          employeeId,
+          employeeName: employeeData?.fiscal_name || '',
+          employeeEmail: employeeData?.email || '',
+          reportStartDate,
+          reportEndDate
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to create report record');
+      }
+
+      const result = await response.json();
+
+      // Create a record in the signed_reports table
+      const { error: insertError } = await supabase
+        .from('signed_reports')
+        .insert({
+          employee_id: employeeId,
+          report_url: result.reportUrl,
+          start_date: reportStartDate,
+          end_date: reportEndDate,
+          status: 'sent',
+          recipient_emails: result.recipients
+        });
+
+      if (insertError) {
+        throw new Error('Failed to create report record');
+      }
+
+      setSignSuccess(true);
+      setTimeout(() => setSignSuccess(false), 5000);
+
+    } catch (err) {
+      console.error('Error generating signed report:', err);
+      setError('Error al generar y enviar el informe firmado');
     } finally {
-      setLoading(false);
+      setSigningInProgress(false);
     }
   };
 
@@ -1079,84 +905,35 @@ const processTimeEntries = (employeeId: string, timeEntries: any[]) => {
               </div>
             </div>
             
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-4">
               <button
                 onClick={generateOfficialReport}
-                disabled={loading || sendingReport}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
               >
                 <Download className="w-5 h-5" />
-                {loading || sendingReport ? 'Procesando...' : 'Generar PDF'}
+                Generar PDF
               </button>
               
               <button
-                onClick={() => setShowSignatureModal(true)}
-                disabled={loading || sendingReport}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                onClick={generateSignedReport}
+                disabled={signingInProgress}
+                className={`flex items-center gap-2 px-4 py-2 ${
+                  signingInProgress ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'
+                } text-white rounded-lg transition-colors`}
               >
-                <PenTool className="w-5 h-5" />
-                Firmar y Enviar
+                <Send className="w-5 h-5" />
+                {signingInProgress ? 'Enviando...' : 'Firmar y Enviar'}
               </button>
             </div>
+            
+            {signSuccess && (
+              <div className="mt-4 p-4 bg-green-50 border-l-4 border-green-500 text-green-700">
+                Informe firmado enviado correctamente. Se ha enviado una copia a tu correo electrónico.
+              </div>
+            )}
           </div>
         </div>
       </div>
-
-      {/* Modal de Firma */}
-      {showSignatureModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xl font-bold">Firmar Informe</h3>
-              <button 
-                onClick={() => setShowSignatureModal(false)}
-                className="text-gray-500 hover:text-gray-700"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            
-            <p className="mb-4 text-gray-600">
-              Por favor, firma en el área de abajo con tu dedo o ratón.
-            </p>
-            
-            <div className="border-2 border-dashed border-gray-300 rounded-lg mb-4">
-              <canvas
-                ref={signatureCanvasRef}
-                width={500}
-                height={200}
-                className="w-full h-48 bg-gray-50 touch-none"
-                onMouseDown={startSignature}
-                onMouseMove={drawSignature}
-                onMouseUp={endSignature}
-                onMouseLeave={endSignature}
-                onTouchStart={startSignature}
-                onTouchMove={drawSignature}
-                onTouchEnd={endSignature}
-              />
-            </div>
-            
-            <div className="flex justify-between">
-              <button
-                onClick={clearSignature}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
-              >
-                <X className="w-5 h-5" />
-                Limpiar
-              </button>
-              
-              <button
-                onClick={saveSignature}
-                disabled={sendingReport}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
-              >
-                <Check className="w-5 h-5" />
-                {sendingReport ? 'Procesando...' : 'Confirmar Firma'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
