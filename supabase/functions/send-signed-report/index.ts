@@ -51,10 +51,10 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Get employee's coordinator email
+    // Get employee's work centers and company_id
     const { data: employeeData, error: employeeError } = await supabaseAdmin
       .from('employee_profiles')
-      .select('work_centers')
+      .select('work_centers, company_id')
       .eq('id', employeeId)
       .single();
 
@@ -116,11 +116,12 @@ Deno.serve(async (req: Request) => {
       .from('reports')
       .getPublicUrl(filePath);
 
-    // Insert record in signed_reports table
+    // Insert record in signed_reports table with company_id
     const { error: reportError } = await supabaseAdmin
       .from('signed_reports')
       .insert({
         employee_id: employeeId,
+        company_id: employeeData.company_id,
         report_url: urlData.publicUrl,
         start_date: reportStartDate,
         end_date: reportEndDate,
