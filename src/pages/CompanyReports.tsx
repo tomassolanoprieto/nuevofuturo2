@@ -241,11 +241,11 @@ export default function CompanyReports() {
     };
   };
 
-  const processTimeEntries = async (employeeId: string) => {
+  const processTimeEntries = async (employeeId: string, entriesToProcess: any[]) => {
     const employee = employees.find(emp => emp.id === employeeId);
     if (!employee) return { dailyResults: [], entriesByDate: {} };
 
-    const employeeEntries = filteredEntries
+    const employeeEntries = entriesToProcess
       .filter(entry => entry.employee_id === employeeId)
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
@@ -444,7 +444,7 @@ export default function CompanyReports() {
             daysInRange.push(new Date(d));
           }
 
-          const { dailyResults } = await processTimeEntries(selectedEmployee);
+          const { dailyResults } = await processTimeEntries(selectedEmployee, filteredEntries);
 
           const resultsByDate = new Map<string, {
             clockIn?: string;
@@ -506,7 +506,7 @@ export default function CompanyReports() {
 
         case 'daily': {
           reportData = await Promise.all(employees.map(async (employee) => {
-            const { dailyResults } = await processTimeEntries(employee.id);
+            const { dailyResults } = await processTimeEntries(employee.id, filteredEntries);
             
             let totalHours = 0;
             let totalNightHours = 0;
@@ -541,7 +541,7 @@ export default function CompanyReports() {
 
         case 'annual': {
           reportData = await Promise.all(employees.map(async (employee) => {
-            const { dailyResults } = await processTimeEntries(employee.id);
+            const { dailyResults } = await processTimeEntries(employee.id, filteredEntries);
             
             const totalHoursByMonth = Array(12).fill(0);
             const nightHoursByMonth = Array(12).fill(0);
@@ -579,8 +579,8 @@ export default function CompanyReports() {
         }
 
         case 'alarms': {
-          reportData = employees.map(employee => {
-            const { dailyResults } = processTimeEntries(employee.id);
+          reportData = await Promise.all(employees.map(async (employee) => {
+            const { dailyResults } = await processTimeEntries(employee.id, filteredEntries);
             const totalHours = dailyResults.reduce((sum, day) => sum + day.hours, 0);
             
             return {
@@ -596,14 +596,10 @@ export default function CompanyReports() {
               total_hours: totalHours,
               time_type: selectedTimeType || ''
             };
-          }).filter(({ total_hours }) => total_hours > hoursLimit)
-            .map(({ employee, total_hours }) => ({
-              employee,
-              date: '-',
-              entry_type: '-',
-              timestamp: '-',
-              total_hours
-            }));
+          }));
+          
+          // Filter only employees with hours over the limit
+          reportData = reportData.filter(report => (report.total_hours || 0) > hoursLimit);
           break;
         }
       }
