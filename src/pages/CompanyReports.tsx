@@ -11,6 +11,8 @@ interface DailyReport {
   clock_out: string;
   break_duration: string;
   total_hours: number;
+  night_hours?: number;
+  holiday_hours?: number;
   time_type?: string;
 }
 
@@ -26,6 +28,8 @@ interface Report {
   timestamp: string;
   work_center?: string;
   total_hours?: number;
+  night_hours?: number;
+  holiday_hours?: number;
   daily_reports?: DailyReport[];
   monthly_hours?: number[];
   time_type?: string;
@@ -55,8 +59,8 @@ export default function CompanyReports() {
   const [selectedTimeType, setSelectedTimeType] = useState<string>('');
   const [timeTypes, setTimeTypes] = useState<string[]>([]);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+  const [specialHoursType, setSpecialHoursType] = useState<'none' | 'night' | 'holiday'>('none');
 
-  // Carga inicial de datos necesarios
   useEffect(() => {
     const loadInitialData = async () => {
       try {
@@ -77,7 +81,6 @@ export default function CompanyReports() {
     loadInitialData();
   }, []);
 
-  // Generar reporte cuando cambian los parámetros
   useEffect(() => {
     if (!initialLoadComplete) return;
 
@@ -102,12 +105,13 @@ export default function CompanyReports() {
     hoursLimit, 
     selectedYear, 
     selectedTimeType,
+    specialHoursType,
     initialLoadComplete
   ]);
 
   const fetchTimeTypes = async () => {
     try {
-      const { data, error } = await supabase
+            const { data, error } = await supabase
         .from('time_entries')
         .select('time_type')
         .not('time_type', 'is', null)
@@ -202,6 +206,172 @@ export default function CompanyReports() {
     return allTimeEntries;
   };
 
+  const getHoursWorked = async (start: string, end: string, breakMs: number, workCenter: string) => {
+    const startTime = new Date(start).getTime();
+    const endTime = new Date(end).getTime();
+    const totalHours = ((endTime - startTime) / (1000 * 60 * 60)) - (breakMs / (1000 * 60 * 60));
+
+    // Detectar horas nocturnas
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    
+    const isNightShift = 
+      startDate.getHours() >= 21 && startDate.getHours() < 23 && 
+      endDate.getHours() >= 5 && endDate.getHours() < 7;
+
+    // Detectar días festivos
+    let isHoliday = false;
+    const dateKey = start.split('T')[0];
+    
+    const { data: holiday } = await supabase
+      .from('holidays')
+      .select('*')
+      .eq('date', dateKey)
+      .eq('work_center', workCenter)
+      .single();
+
+    if (holiday) {
+      isHoliday = true;
+    }
+
+    return {
+      totalHours,
+      nightHours: isNightShift ? totalHours : 0,
+      holidayHours: isHoliday ? totalHours : 0
+    };
+  };
+
+  const processTimeEntries = async (employeeId: string) => {
+    const employee = employees.find(emp => emp.id === employeeId);
+    if (!employee) return { dailyResults: [], entriesByDate: {} };
+
+    const employeeEntries = filteredEntries
+      .filter(entry => entry.employee_id === employeeId)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    const dailyResults: any[] = [];
+    let currentEntry: any = null;
+    let pendingClockOuts: any[] = [];
+
+    for (const entry of employeeEntries) {
+      const dateKey = entry.timestamp.split('T')[0];
+      const entryTime = new Date(entry.timestamp);
+
+      switch (entry.entry_type) {
+        case 'clock_in':
+          if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
+            const endOfDay = new Date(currentEntry.date);
+            endOfDay.setHours(23, 59, 59, 999);
+            currentEntry.clockOut = endOfDay.toISOString();
+            const workCenter = currentEntry.workCenter || employee.work_centers[0];
+            const hoursData = await getHoursWorked(
+              currentEntry.clockIn,
+              currentEntry.clockOut,
+              currentEntry.breakDuration,
+              workCenter
+            );
+            currentEntry.hours = hoursData.totalHours;
+            currentEntry.nightHours = hoursData.nightHours;
+            currentEntry.holidayHours = hoursData.holidayHours;
+            dailyResults.push(currentEntry);
+          }
+          
+          currentEntry = {
+            date: dateKey,
+            dateObj: new Date(dateKey),
+            clockIn: entry.timestamp,
+            breakDuration: 0,
+            timeType: entry.time_type,
+            workCenter: entry.work_center,
+            clockOut: undefined,
+            hours: 0,
+            nightHours: 0,
+            holidayHours: 0
+          };
+          break;
+
+        case 'clock_out':
+          if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
+            currentEntry.clockOut = entry.timestamp;
+            const workCenter = currentEntry.workCenter || employee.work_centers[0];
+            const hoursData = await getHoursWorked(
+              currentEntry.clockIn,
+              currentEntry.clockOut,
+              currentEntry.breakDuration,
+              workCenter
+            );
+            currentEntry.hours = hoursData.totalHours;
+            currentEntry.nightHours = hoursData.nightHours;
+            currentEntry.holidayHours = hoursData.holidayHours;
+            dailyResults.push(currentEntry);
+            currentEntry = null;
+          } else {
+            pendingClockOuts.push(entry);
+          }
+          break;
+
+        case 'break_start':
+          if (currentEntry) {
+            currentEntry.breakStart = entry.timestamp;
+          }
+          break;
+
+        case 'break_end':
+          if (currentEntry && currentEntry.breakStart) {
+            const breakStart = new Date(currentEntry.breakStart).getTime();
+            const breakEnd = entryTime.getTime();
+            currentEntry.breakDuration += (breakEnd - breakStart);
+            currentEntry.breakStart = undefined;
+          }
+          break;
+      }
+    }
+
+    if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
+      const endOfDay = new Date(currentEntry.date);
+      endOfDay.setHours(23, 59, 59, 999);
+      currentEntry.clockOut = endOfDay.toISOString();
+      const workCenter = currentEntry.workCenter || employee.work_centers[0];
+      const hoursData = await getHoursWorked(
+        currentEntry.clockIn,
+        currentEntry.clockOut,
+        currentEntry.breakDuration,
+        workCenter
+      );
+      currentEntry.hours = hoursData.totalHours;
+      currentEntry.nightHours = hoursData.nightHours;
+      currentEntry.holidayHours = hoursData.holidayHours;
+      dailyResults.push(currentEntry);
+    }
+
+    pendingClockOuts.forEach(clockOut => {
+      dailyResults.push({
+        date: clockOut.timestamp.split('T')[0],
+        dateObj: new Date(clockOut.timestamp.split('T')[0]),
+        clockIn: undefined,
+        clockOut: clockOut.timestamp,
+        breakDuration: 0,
+        hours: 0,
+        nightHours: 0,
+        holidayHours: 0,
+        timeType: clockOut.time_type,
+        workCenter: clockOut.work_center
+      });
+    });
+
+    const entriesByDate = employeeEntries.reduce((acc, entry) => {
+      const date = entry.timestamp.split('T')[0];
+      if (!acc[date]) acc[date] = [];
+      acc[date].push(entry);
+      return acc;
+    }, {} as Record<string, any[]>);
+
+    return {
+      dailyResults,
+      entriesByDate
+    };
+  };
+
   const generateReport = async () => {
     if (!initialLoadComplete) return;
 
@@ -258,119 +428,6 @@ export default function CompanyReports() {
         filteredEntries = filteredEntries.filter(entry => entry.time_type === selectedTimeType);
       }
 
-      const processTimeEntries = (employeeId: string) => {
-        const employeeEntries = filteredEntries
-          .filter(entry => entry.employee_id === employeeId)
-          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-        const dailyResults: any[] = [];
-        let currentEntry: any = null;
-        let pendingClockOuts: any[] = [];
-
-        const getHoursWorked = (start: string, end: string, breakMs: number) => {
-          const startTime = new Date(start).getTime();
-          const endTime = new Date(end).getTime();
-          return ((endTime - startTime) / (1000 * 60 * 60)) - (breakMs / (1000 * 60 * 60));
-        };
-
-        for (const entry of employeeEntries) {
-          const dateKey = entry.timestamp.split('T')[0];
-          const entryTime = new Date(entry.timestamp);
-
-          switch (entry.entry_type) {
-            case 'clock_in':
-              if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
-                const endOfDay = new Date(currentEntry.date);
-                endOfDay.setHours(23, 59, 59, 999);
-                currentEntry.clockOut = endOfDay.toISOString();
-                currentEntry.hours = getHoursWorked(
-                  currentEntry.clockIn,
-                  currentEntry.clockOut,
-                  currentEntry.breakDuration
-                );
-                dailyResults.push(currentEntry);
-              }
-              
-              currentEntry = {
-                date: dateKey,
-                dateObj: new Date(dateKey),
-                clockIn: entry.timestamp,
-                breakDuration: 0,
-                timeType: entry.time_type,
-                clockOut: undefined,
-                hours: 0
-              };
-              break;
-
-            case 'clock_out':
-              if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
-                currentEntry.clockOut = entry.timestamp;
-                currentEntry.hours = getHoursWorked(
-                  currentEntry.clockIn,
-                  currentEntry.clockOut,
-                  currentEntry.breakDuration
-                );
-                dailyResults.push(currentEntry);
-                currentEntry = null;
-              } else {
-                pendingClockOuts.push(entry);
-              }
-              break;
-
-            case 'break_start':
-              if (currentEntry) {
-                currentEntry.breakStart = entry.timestamp;
-              }
-              break;
-
-            case 'break_end':
-              if (currentEntry && currentEntry.breakStart) {
-                const breakStart = new Date(currentEntry.breakStart).getTime();
-                const breakEnd = entryTime.getTime();
-                currentEntry.breakDuration += (breakEnd - breakStart);
-                currentEntry.breakStart = undefined;
-              }
-              break;
-          }
-        }
-
-        if (currentEntry && currentEntry.clockIn && !currentEntry.clockOut) {
-          const endOfDay = new Date(currentEntry.date);
-          endOfDay.setHours(23, 59, 59, 999);
-          currentEntry.clockOut = endOfDay.toISOString();
-          currentEntry.hours = getHoursWorked(
-            currentEntry.clockIn,
-            currentEntry.clockOut,
-            currentEntry.breakDuration
-          );
-          dailyResults.push(currentEntry);
-        }
-
-        pendingClockOuts.forEach(clockOut => {
-          dailyResults.push({
-            date: clockOut.timestamp.split('T')[0],
-            dateObj: new Date(clockOut.timestamp.split('T')[0]),
-            clockIn: undefined,
-            clockOut: clockOut.timestamp,
-            breakDuration: 0,
-            hours: 0,
-            timeType: clockOut.time_type
-          });
-        });
-
-        const entriesByDate = employeeEntries.reduce((acc, entry) => {
-          const date = entry.timestamp.split('T')[0];
-          if (!acc[date]) acc[date] = [];
-          acc[date].push(entry);
-          return acc;
-        }, {} as Record<string, any[]>);
-
-        return {
-          dailyResults,
-          entriesByDate
-        };
-      };
-
       let reportData: Report[] = [];
 
       switch (reportType) {
@@ -387,13 +444,15 @@ export default function CompanyReports() {
             daysInRange.push(new Date(d));
           }
 
-          const { dailyResults } = processTimeEntries(selectedEmployee);
+          const { dailyResults } = await processTimeEntries(selectedEmployee);
 
           const resultsByDate = new Map<string, {
             clockIn?: string;
             clockOut?: string;
             breakDuration: number;
             hours: number;
+            nightHours: number;
+            holidayHours: number;
             timeType?: string;
           }>();
           
@@ -403,6 +462,8 @@ export default function CompanyReports() {
               clockOut: day.clockOut,
               breakDuration: day.breakDuration,
               hours: day.hours,
+              nightHours: day.nightHours,
+              holidayHours: day.holidayHours,
               timeType: day.timeType
             });
           });
@@ -422,6 +483,8 @@ export default function CompanyReports() {
               clock_out: dayData?.clockOut ? new Date(dayData.clockOut).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '',
               break_duration: dayData?.breakDuration ? `${Math.floor(dayData.breakDuration / (1000 * 60 * 60))}:${Math.floor((dayData.breakDuration % (1000 * 60 * 60)) / (1000 * 60)).toString().padStart(2, '0')}` : '',
               total_hours: dayData?.hours || 0,
+              night_hours: dayData?.nightHours || 0,
+              holiday_hours: dayData?.holidayHours || 0,
               time_type: dayData?.timeType || ''
             };
           });
@@ -442,10 +505,19 @@ export default function CompanyReports() {
         }
 
         case 'daily': {
-          reportData = employees.map(employee => {
-            const { dailyResults } = processTimeEntries(employee.id);
-            const totalHours = dailyResults.reduce((sum, day) => sum + day.hours, 0);
+          reportData = await Promise.all(employees.map(async (employee) => {
+            const { dailyResults } = await processTimeEntries(employee.id);
             
+            let totalHours = 0;
+            let totalNightHours = 0;
+            let totalHolidayHours = 0;
+            
+            dailyResults.forEach(day => {
+              totalHours += day.hours;
+              totalNightHours += day.nightHours || 0;
+              totalHolidayHours += day.holidayHours || 0;
+            });
+
             return {
               employee: {
                 fiscal_name: employee.fiscal_name,
@@ -456,22 +528,35 @@ export default function CompanyReports() {
               date: `${startDate} - ${endDate}`,
               entry_type: '',
               timestamp: '',
-              total_hours: totalHours,
-              time_type: selectedTimeType || 'Todos'
+              total_hours: specialHoursType === 'night' ? totalNightHours : 
+                          specialHoursType === 'holiday' ? totalHolidayHours : 
+                          totalHours,
+              time_type: selectedTimeType || 'Todos',
+              night_hours: totalNightHours,
+              holiday_hours: totalHolidayHours
             };
-          });
+          }));
           break;
         }
 
         case 'annual': {
-          reportData = employees.map(employee => {
-            const { dailyResults } = processTimeEntries(employee.id);
+          reportData = await Promise.all(employees.map(async (employee) => {
+            const { dailyResults } = await processTimeEntries(employee.id);
+            
             const totalHoursByMonth = Array(12).fill(0);
+            const nightHoursByMonth = Array(12).fill(0);
+            const holidayHoursByMonth = Array(12).fill(0);
             
             dailyResults.forEach(day => {
               const month = day.dateObj.getMonth();
               totalHoursByMonth[month] += day.hours;
+              nightHoursByMonth[month] += day.nightHours || 0;
+              holidayHoursByMonth[month] += day.holidayHours || 0;
             });
+
+            const displayedHoursByMonth = specialHoursType === 'night' ? nightHoursByMonth :
+                                        specialHoursType === 'holiday' ? holidayHoursByMonth :
+                                        totalHoursByMonth;
 
             return {
               employee: {
@@ -483,11 +568,13 @@ export default function CompanyReports() {
               date: `Año ${selectedYear}`,
               entry_type: '',
               timestamp: '',
-              total_hours: totalHoursByMonth.reduce((acc, hours) => acc + hours, 0),
-              monthly_hours: totalHoursByMonth,
-              time_type: selectedTimeType || 'Todos'
+              total_hours: displayedHoursByMonth.reduce((acc, hours) => acc + hours, 0),
+              monthly_hours: displayedHoursByMonth,
+              time_type: selectedTimeType || 'Todos',
+              night_hours: nightHoursByMonth.reduce((acc, hours) => acc + hours, 0),
+              holiday_hours: holidayHoursByMonth.reduce((acc, hours) => acc + hours, 0)
             };
-          });
+          }));
           break;
         }
 
@@ -547,7 +634,7 @@ export default function CompanyReports() {
       doc.setFontSize(10);
       const tableData = [
         ['Empresa: NUEVO FUTURO', `Trabajador: ${report.employee.fiscal_name}`],
-        ['C.I.F/N.I.F: G28309862', `N.I.F: ${report.employee.document_number}`],
+                ['C.I.F/N.I.F: G28309862', `N.I.F: ${report.employee.document_number}`],
         [`Centro de Trabajo: ${report.employee.work_centers.join(', ')}`],
         ['C.C.C:', `Mes y Año: ${new Date(startDate).toLocaleDateString('es-ES', { month: '2-digit', year: 'numeric' })}`]
       ];
@@ -654,7 +741,9 @@ export default function CompanyReports() {
         'Tipo': report.entry_type,
         'Hora': report.timestamp,
         'Centro de Trabajo': report.work_center || '',
-        ...(report.total_hours ? { 'Horas Totales': report.total_hours } : {}),
+        'Horas Totales': report.total_hours || 0,
+        'Horas Nocturnas': report.night_hours || 0,
+        'Horas Festivas': report.holiday_hours || 0,
         ...(report.monthly_hours ? {
           'Enero': report.monthly_hours[0],
           'Febrero': report.monthly_hours[1],
@@ -667,7 +756,9 @@ export default function CompanyReports() {
           'Septiembre': report.monthly_hours[8],
           'Octubre': report.monthly_hours[9],
           'Noviembre': report.monthly_hours[10],
-          'Diciembre': report.monthly_hours[11]
+          'Diciembre': report.monthly_hours[11],
+          'Total Horas Nocturnas': report.night_hours || 0,
+          'Total Horas Festivas': report.holiday_hours || 0
         } : {})
       }));
 
@@ -766,7 +857,6 @@ export default function CompanyReports() {
                     value={selectedWorkCenter}
                     onChange={(e) => {
                       setSelectedWorkCenter(e.target.value);
-                      // Actualizar empleados cuando cambia el centro de trabajo
                       fetchEmployees();
                     }}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -781,23 +871,40 @@ export default function CompanyReports() {
                 </div>
 
                 {(reportType === 'daily' || reportType === 'annual') && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Tipo de Fichaje
-                    </label>
-                    <select
-                      value={selectedTimeType}
-                      onChange={(e) => setSelectedTimeType(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    >
-                      <option value="">Todos los tipos</option>
-                      {timeTypes.map((type) => (
-                        <option key={type} value={type}>
-                          {type}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Tipo de Fichaje
+                      </label>
+                      <select
+                        value={selectedTimeType}
+                        onChange={(e) => setSelectedTimeType(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="">Todos los tipos</option>
+                        {timeTypes.map((type) => (
+                          <option key={type} value={type}>
+                            {type}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Tipo de Horas Especiales
+                      </label>
+                      <select
+                        value={specialHoursType}
+                        onChange={(e) => setSpecialHoursType(e.target.value as 'none' | 'night' | 'holiday')}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="none">Mostrar todas las horas</option>
+                        <option value="night">Solo horas nocturnas</option>
+                        <option value="holiday">Solo horas festivas</option>
+                      </select>
+                    </div>
+                  </>
                 )}
 
                 {reportType === 'alarms' && (
@@ -909,8 +1016,19 @@ export default function CompanyReports() {
                           Fechas
                         </th>
                         <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Total Horas
+                          {specialHoursType === 'night' ? 'Horas Nocturnas' : 
+                           specialHoursType === 'holiday' ? 'Horas Festivas' : 'Total Horas'}
                         </th>
+                        {specialHoursType === 'none' && (
+                          <>
+                            <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Horas Nocturnas
+                            </th>
+                            <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Horas Festivas
+                            </th>
+                          </>
+                        )}
                       </>
                     ) : reportType === 'annual' ? (
                       <>
@@ -932,7 +1050,7 @@ export default function CompanyReports() {
                         <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           Junio
                         </th>
-                        <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           Julio
                         </th>
                         <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -951,8 +1069,19 @@ export default function CompanyReports() {
                           Diciembre
                         </th>
                         <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Total Horas
+                          {specialHoursType === 'night' ? 'Horas Nocturnas' : 
+                           specialHoursType === 'holiday' ? 'Horas Festivas' : 'Total Horas'}
                         </th>
+                        {specialHoursType === 'none' && (
+                          <>
+                            <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Horas Nocturnas
+                            </th>
+                            <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Horas Festivas
+                            </th>
+                          </>
+                        )}
                       </>
                     ) : (
                       <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -964,13 +1093,17 @@ export default function CompanyReports() {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {isLoading ? (
                     <tr>
-                      <td colSpan={reportType === 'annual' ? 16 : (reportType === 'daily' ? 7 : 6)} className="px-6 py-4 text-center">
+                      <td colSpan={reportType === 'annual' ? (specialHoursType === 'none' ? 18 : 16) : 
+                          (reportType === 'daily' ? (specialHoursType === 'none' ? 8 : 6) : 6)} 
+                          className="px-6 py-4 text-center">
                         Cargando...
                       </td>
                     </tr>
                   ) : reports.length === 0 ? (
                     <tr>
-                      <td colSpan={reportType === 'annual' ? 16 : (reportType === 'daily' ? 7 : 6)} className="px-6 py-4 text-center">
+                      <td colSpan={reportType === 'annual' ? (specialHoursType === 'none' ? 18 : 16) : 
+                          (reportType === 'daily' ? (specialHoursType === 'none' ? 8 : 6) : 6)} 
+                          className="px-6 py-4 text-center">
                         No hay datos para mostrar
                       </td>
                     </tr>
@@ -999,6 +1132,16 @@ export default function CompanyReports() {
                             <td className="px-6 py-4 whitespace-nowrap">
                               {report.total_hours?.toFixed(2)} h
                             </td>
+                            {specialHoursType === 'none' && (
+                              <>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  {report.night_hours?.toFixed(2)} h
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  {report.holiday_hours?.toFixed(2)} h
+                                </td>
+                              </>
+                            )}
                           </>
                         ) : reportType === 'annual' ? (
                           <>
@@ -1010,6 +1153,16 @@ export default function CompanyReports() {
                             <td className="px-6 py-4 whitespace-nowrap">
                               {report.total_hours?.toFixed(2)} h
                             </td>
+                            {specialHoursType === 'none' && (
+                              <>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  {report.night_hours?.toFixed(2)} h
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  {report.holiday_hours?.toFixed(2)} h
+                                </td>
+                              </>
+                            )}
                           </>
                         ) : (
                           <td className="px-6 py-4 whitespace-nowrap">
