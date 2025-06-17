@@ -12,7 +12,8 @@
   "dependencies": {
     "@emailjs/browser": "^4.1.0",
     "@supabase/supabase-js": "^2.39.8",
-    "jspdf": "^2.5.1", 
+    "emailjs-com": "^3.2.0",
+    "jspdf": "^2.5.1",
     "jspdf-autotable": "^3.8.1",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",

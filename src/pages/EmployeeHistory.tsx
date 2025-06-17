@@ -4,6 +4,7 @@ import { Calendar, Download, FileText, PenTool, X, Check } from 'lucide-react';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { toast } from 'react-hot-toast';
+import emailjs from '@emailjs/browser';
 
 interface DailyReport {
   date: string;

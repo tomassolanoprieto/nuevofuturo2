@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { send } from 'npm:emailjs-com@3.2.0';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -7,12 +8,14 @@ const corsHeaders = {
 };
 
 interface RequestBody {
+  reportId: string;
   pdfBase64: string;
   employeeId: string;
   employeeName: string;
   employeeEmail: string;
   reportStartDate: string;
   reportEndDate: string;
+  signatureData: string;
 }
 
 Deno.serve(async (req: Request) => {
@@ -39,9 +42,18 @@ Deno.serve(async (req: Request) => {
     }
 
     const body: RequestBody = await req.json();
-    const { pdfBase64, employeeId, employeeName, employeeEmail, reportStartDate, reportEndDate } = body;
+    const { 
+      reportId, 
+      pdfBase64, 
+      employeeId, 
+      employeeName, 
+      employeeEmail, 
+      reportStartDate, 
+      reportEndDate,
+      signatureData
+    } = body;
 
-    if (!pdfBase64 || !employeeId || !employeeEmail || !reportStartDate || !reportEndDate) {
+    if (!pdfBase64 || !employeeId || !employeeEmail || !reportStartDate || !reportEndDate || !reportId) {
       return new Response(
         JSON.stringify({ error: 'Missing required fields' }),
         { 
@@ -51,10 +63,10 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Get employee's coordinator email
+    // Get employee's supervisor email
     const { data: employeeData, error: employeeError } = await supabaseAdmin
       .from('employee_profiles')
-      .select('work_centers')
+      .select('work_centers, delegation')
       .eq('id', employeeId)
       .single();
 
@@ -69,8 +81,8 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Get coordinator for the employee's work center
-    const { data: coordinatorData, error: coordinatorError } = await supabaseAdmin
+    // Get center supervisor for the employee's work center
+    const { data: centerSupervisorData } = await supabaseAdmin
       .from('supervisor_profiles')
       .select('email')
       .eq('supervisor_type', 'center')
@@ -78,14 +90,25 @@ Deno.serve(async (req: Request) => {
       .overlaps('work_centers', employeeData.work_centers)
       .limit(1);
 
-    if (coordinatorError) {
-      console.error('Error fetching coordinator data:', coordinatorError);
-      // Continue even if we can't find a coordinator
-    }
+    // Get delegation supervisor for the employee's delegation
+    const { data: delegationSupervisorData } = await supabaseAdmin
+      .from('supervisor_profiles')
+      .select('email')
+      .eq('supervisor_type', 'delegation')
+      .eq('is_active', true)
+      .contains('delegations', [employeeData.delegation])
+      .limit(1);
 
-    const coordinatorEmail = coordinatorData && coordinatorData.length > 0 
-      ? coordinatorData[0].email 
-      : null;
+    // Collect all supervisor emails
+    const supervisorEmails: string[] = [];
+    
+    if (centerSupervisorData && centerSupervisorData.length > 0) {
+      supervisorEmails.push(centerSupervisorData[0].email);
+    }
+    
+    if (delegationSupervisorData && delegationSupervisorData.length > 0) {
+      supervisorEmails.push(delegationSupervisorData[0].email);
+    }
 
     // Convert base64 to blob
     const base64Data = pdfBase64.split(',')[1]; // Remove data:application/pdf;base64, prefix
@@ -116,14 +139,39 @@ Deno.serve(async (req: Request) => {
       .from('reports')
       .getPublicUrl(filePath);
 
-    // Create email recipients array
-    const emailRecipients = [employeeEmail];
-    if (coordinatorEmail) {
-      emailRecipients.push(coordinatorEmail);
+    // Update the report record with the URL and recipient emails
+    const { error: updateError } = await supabaseAdmin
+      .from('signed_reports')
+      .update({ 
+        report_url: urlData.publicUrl,
+        recipient_emails: [employeeEmail, ...supervisorEmails]
+      })
+      .eq('id', reportId);
+
+    if (updateError) {
+      console.error('Error updating report record:', updateError);
+      // Continue anyway to try sending the email
     }
 
-    // Insert email notification records for each recipient
-    for (const recipient of emailRecipients) {
+    // Send emails using EmailJS
+    const emailJsResult = await send(
+      'service_otiqowa',
+      'template_8bsjbnl',
+      {
+        to_email: employeeEmail,
+        cc_email: supervisorEmails.join(','),
+        employee_name: employeeName,
+        report_start_date: new Date(reportStartDate).toLocaleDateString('es-ES'),
+        report_end_date: new Date(reportEndDate).toLocaleDateString('es-ES'),
+        report_url: urlData.publicUrl
+      },
+      'KxnX0MtAANy2LPlwd'
+    );
+
+    console.log('EmailJS response:', emailJsResult);
+
+    // Also create email notification records for tracking
+    for (const recipient of [employeeEmail, ...supervisorEmails]) {
       const { error: emailError } = await supabaseAdmin
         .from('email_notifications')
         .insert({
@@ -144,7 +192,7 @@ Deno.serve(async (req: Request) => {
         success: true, 
         message: 'Informe firmado enviado por correo electrónico',
         reportUrl: urlData.publicUrl,
-        recipients: emailRecipients
+        recipients: [employeeEmail, ...supervisorEmails]
       }),
       { 
         status: 200, 
