@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { encode } from 'https://deno.land/std@0.177.0/encoding/base64.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -152,39 +153,78 @@ Deno.serve(async (req: Request) => {
       // Continue anyway to try sending the email
     }
 
-    // Send emails using a simple SMTP service or email API
-    // For now, we'll create email notification records and mark them as sent
-    // In a production environment, you would integrate with an email service like Resend, SendGrid, etc.
+    // Send email using EmailJS API directly (without XMLHttpRequest)
+    const emailJsServiceId = 'service_otiqowa';
+    const emailJsTemplateId = 'template_8bsjbnl';
+    const emailJsUserId = 'KxnX0MtAANy2LPlwd';
     
-    const emailSubject = `Informe firmado del ${new Date(reportStartDate).toLocaleDateString('es-ES')} al ${new Date(reportEndDate).toLocaleDateString('es-ES')}`;
-    const emailMessage = `Se ha generado un nuevo informe firmado para ${employeeName}. Puedes descargarlo desde: ${urlData.publicUrl}`;
-
-    // Create email notification records for tracking
+    // Prepare email data for all recipients
     const emailPromises = [employeeEmail, ...supervisorEmails].map(async (recipient) => {
-      const { error: emailError } = await supabaseAdmin
-        .from('email_notifications')
-        .insert({
-          to_email: recipient,
-          subject: emailSubject,
-          message: emailMessage,
-          report_url: urlData.publicUrl,
-          status: 'sent', // Mark as sent for now
-          sent_at: new Date().toISOString()
+      try {
+        // Create email notification record
+        const { error: emailNotifError } = await supabaseAdmin
+          .from('email_notifications')
+          .insert({
+            to_email: recipient,
+            subject: `Informe firmado del ${new Date(reportStartDate).toLocaleDateString('es-ES')} al ${new Date(reportEndDate).toLocaleDateString('es-ES')}`,
+            message: `Se ha generado un nuevo informe firmado para ${employeeName}. Puedes descargarlo desde: ${urlData.publicUrl}`,
+            report_url: urlData.publicUrl,
+            status: 'pending'
+          });
+
+        if (emailNotifError) {
+          console.error(`Email notification error for ${recipient}:`, emailNotifError);
+        }
+
+        // Send email using EmailJS API directly
+        const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            service_id: emailJsServiceId,
+            template_id: emailJsTemplateId,
+            user_id: emailJsUserId,
+            template_params: {
+              to_email: recipient,
+              employee_name: employeeName,
+              report_start_date: new Date(reportStartDate).toLocaleDateString('es-ES'),
+              report_end_date: new Date(reportEndDate).toLocaleDateString('es-ES'),
+              report_url: urlData.publicUrl
+            }
+          })
         });
 
-      if (emailError) {
-        console.error(`Email notification error for ${recipient}:`, emailError);
-        return { recipient, success: false, error: emailError.message };
+        if (!response.ok) {
+          const errorData = await response.text();
+          console.error(`EmailJS API error for ${recipient}:`, errorData);
+          return { recipient, success: false, error: errorData };
+        }
+
+        // Update email notification status
+        const { error: updateNotifError } = await supabaseAdmin
+          .from('email_notifications')
+          .update({ status: 'sent', sent_at: new Date().toISOString() })
+          .eq('to_email', recipient)
+          .eq('report_url', urlData.publicUrl);
+
+        if (updateNotifError) {
+          console.error(`Error updating notification status for ${recipient}:`, updateNotifError);
+        }
+
+        return { recipient, success: true };
+      } catch (err) {
+        console.error(`Error sending email to ${recipient}:`, err);
+        return { recipient, success: false, error: err.message };
       }
-      
-      return { recipient, success: true };
     });
 
     const emailResults = await Promise.all(emailPromises);
     const successfulEmails = emailResults.filter(result => result.success);
     const failedEmails = emailResults.filter(result => !result.success);
 
-    console.log('Email notification results:', { successfulEmails, failedEmails });
+    console.log('Email sending results:', { successfulEmails, failedEmails });
 
     return new Response(
       JSON.stringify({ 
@@ -194,7 +234,8 @@ Deno.serve(async (req: Request) => {
         recipients: [employeeEmail, ...supervisorEmails],
         emailResults: {
           successful: successfulEmails.length,
-          failed: failedEmails.length
+          failed: failedEmails.length,
+          details: emailResults
         }
       }),
       { 
