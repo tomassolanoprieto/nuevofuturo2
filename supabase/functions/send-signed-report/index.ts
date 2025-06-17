@@ -1,5 +1,4 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { encode } from 'https://deno.land/std@0.177.0/encoding/base64.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -8,14 +7,12 @@ const corsHeaders = {
 };
 
 interface RequestBody {
-  reportId: string;
   pdfBase64: string;
   employeeId: string;
   employeeName: string;
   employeeEmail: string;
   reportStartDate: string;
   reportEndDate: string;
-  signatureData: string;
 }
 
 Deno.serve(async (req: Request) => {
@@ -42,18 +39,9 @@ Deno.serve(async (req: Request) => {
     }
 
     const body: RequestBody = await req.json();
-    const { 
-      reportId, 
-      pdfBase64, 
-      employeeId, 
-      employeeName, 
-      employeeEmail, 
-      reportStartDate, 
-      reportEndDate,
-      signatureData
-    } = body;
+    const { pdfBase64, employeeId, employeeName, employeeEmail, reportStartDate, reportEndDate } = body;
 
-    if (!pdfBase64 || !employeeId || !employeeEmail || !reportStartDate || !reportEndDate || !reportId) {
+    if (!pdfBase64 || !employeeId || !employeeEmail || !reportStartDate || !reportEndDate) {
       return new Response(
         JSON.stringify({ error: 'Missing required fields' }),
         { 
@@ -63,10 +51,10 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Get employee's supervisor email
+    // Get employee's coordinator email
     const { data: employeeData, error: employeeError } = await supabaseAdmin
       .from('employee_profiles')
-      .select('work_centers, delegation')
+      .select('work_centers')
       .eq('id', employeeId)
       .single();
 
@@ -81,8 +69,8 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Get center supervisor for the employee's work center
-    const { data: centerSupervisorData } = await supabaseAdmin
+    // Get coordinator for the employee's work center
+    const { data: coordinatorData, error: coordinatorError } = await supabaseAdmin
       .from('supervisor_profiles')
       .select('email')
       .eq('supervisor_type', 'center')
@@ -90,25 +78,14 @@ Deno.serve(async (req: Request) => {
       .overlaps('work_centers', employeeData.work_centers)
       .limit(1);
 
-    // Get delegation supervisor for the employee's delegation
-    const { data: delegationSupervisorData } = await supabaseAdmin
-      .from('supervisor_profiles')
-      .select('email')
-      .eq('supervisor_type', 'delegation')
-      .eq('is_active', true)
-      .contains('delegations', [employeeData.delegation])
-      .limit(1);
+    if (coordinatorError) {
+      console.error('Error fetching coordinator data:', coordinatorError);
+      // Continue even if we can't find a coordinator
+    }
 
-    // Collect all supervisor emails
-    const supervisorEmails: string[] = [];
-    
-    if (centerSupervisorData && centerSupervisorData.length > 0) {
-      supervisorEmails.push(centerSupervisorData[0].email);
-    }
-    
-    if (delegationSupervisorData && delegationSupervisorData.length > 0) {
-      supervisorEmails.push(delegationSupervisorData[0].email);
-    }
+    const coordinatorEmail = coordinatorData && coordinatorData.length > 0 
+      ? coordinatorData[0].email 
+      : null;
 
     // Convert base64 to blob
     const base64Data = pdfBase64.split(',')[1]; // Remove data:application/pdf;base64, prefix
@@ -139,104 +116,35 @@ Deno.serve(async (req: Request) => {
       .from('reports')
       .getPublicUrl(filePath);
 
-    // Update the report record with the URL and recipient emails
-    const { error: updateError } = await supabaseAdmin
-      .from('signed_reports')
-      .update({ 
-        report_url: urlData.publicUrl,
-        recipient_emails: [employeeEmail, ...supervisorEmails]
-      })
-      .eq('id', reportId);
-
-    if (updateError) {
-      console.error('Error updating report record:', updateError);
-      // Continue anyway to try sending the email
+    // Create email recipients array
+    const emailRecipients = [employeeEmail];
+    if (coordinatorEmail) {
+      emailRecipients.push(coordinatorEmail);
     }
 
-    // Send email using EmailJS API directly (without XMLHttpRequest)
-    const emailJsServiceId = 'service_otiqowa';
-    const emailJsTemplateId = 'template_8bsjbnl';
-    const emailJsUserId = 'KxnX0MtAANy2LPlwd';
-    
-    // Prepare email data for all recipients
-    const emailPromises = [employeeEmail, ...supervisorEmails].map(async (recipient) => {
-      try {
-        // Create email notification record
-        const { error: emailNotifError } = await supabaseAdmin
-          .from('email_notifications')
-          .insert({
-            to_email: recipient,
-            subject: `Informe firmado del ${new Date(reportStartDate).toLocaleDateString('es-ES')} al ${new Date(reportEndDate).toLocaleDateString('es-ES')}`,
-            message: `Se ha generado un nuevo informe firmado para ${employeeName}. Puedes descargarlo desde: ${urlData.publicUrl}`,
-            report_url: urlData.publicUrl,
-            status: 'pending'
-          });
-
-        if (emailNotifError) {
-          console.error(`Email notification error for ${recipient}:`, emailNotifError);
-        }
-
-        // Send email using EmailJS API directly
-        const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            service_id: emailJsServiceId,
-            template_id: emailJsTemplateId,
-            user_id: emailJsUserId,
-            template_params: {
-              to_email: recipient,
-              employee_name: employeeName,
-              report_start_date: new Date(reportStartDate).toLocaleDateString('es-ES'),
-              report_end_date: new Date(reportEndDate).toLocaleDateString('es-ES'),
-              report_url: urlData.publicUrl
-            }
-          })
+    // Insert email notification records for each recipient
+    for (const recipient of emailRecipients) {
+      const { error: emailError } = await supabaseAdmin
+        .from('email_notifications')
+        .insert({
+          to_email: recipient,
+          subject: `Informe firmado del ${reportStartDate} al ${reportEndDate}`,
+          message: `Se ha generado un nuevo informe firmado para ${employeeName}. Puedes descargarlo desde: ${urlData.publicUrl}`,
+          report_url: urlData.publicUrl
         });
 
-        if (!response.ok) {
-          const errorData = await response.text();
-          console.error(`EmailJS API error for ${recipient}:`, errorData);
-          return { recipient, success: false, error: errorData };
-        }
-
-        // Update email notification status
-        const { error: updateNotifError } = await supabaseAdmin
-          .from('email_notifications')
-          .update({ status: 'sent', sent_at: new Date().toISOString() })
-          .eq('to_email', recipient)
-          .eq('report_url', urlData.publicUrl);
-
-        if (updateNotifError) {
-          console.error(`Error updating notification status for ${recipient}:`, updateNotifError);
-        }
-
-        return { recipient, success: true };
-      } catch (err) {
-        console.error(`Error sending email to ${recipient}:`, err);
-        return { recipient, success: false, error: err.message };
+      if (emailError) {
+        console.error(`Email notification error for ${recipient}:`, emailError);
+        // Continue with other recipients even if one fails
       }
-    });
-
-    const emailResults = await Promise.all(emailPromises);
-    const successfulEmails = emailResults.filter(result => result.success);
-    const failedEmails = emailResults.filter(result => !result.success);
-
-    console.log('Email sending results:', { successfulEmails, failedEmails });
+    }
 
     return new Response(
       JSON.stringify({ 
         success: true, 
-        message: 'Informe firmado procesado correctamente',
+        message: 'Informe firmado enviado por correo electrónico',
         reportUrl: urlData.publicUrl,
-        recipients: [employeeEmail, ...supervisorEmails],
-        emailResults: {
-          successful: successfulEmails.length,
-          failed: failedEmails.length,
-          details: emailResults
-        }
+        recipients: emailRecipients
       }),
       { 
         status: 200, 

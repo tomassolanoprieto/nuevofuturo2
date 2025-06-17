@@ -366,31 +366,7 @@ export default function EmployeeHistory() {
     try {
       if (!employeeData) return;
 
-      const employeeId = localStorage.getItem('employeeId');
-      if (!employeeId) {
-        throw new Error('No se encontró el ID del empleado');
-      }
-
-      // Create a signed report record first
-      const { data: reportData, error: reportError } = await supabase
-        .from('signed_reports')
-        .insert([{
-          employee_id: employeeId,
-          report_url: 'pending', // Will be updated by the edge function
-          start_date: reportStartDate,
-          end_date: reportEndDate,
-          status: 'sent',
-          recipient_emails: [employeeData.email]
-        }])
-        .select()
-        .single();
-      
-      if (reportError) {
-        console.error('Error creating report record:', reportError);
-        throw new Error('Failed to create report record');
-      }
-
-      // Convert blob to base64 for the edge function
+      // Convert blob to base64
       const reader = new FileReader();
       reader.readAsDataURL(pdfBlob);
       
@@ -399,43 +375,66 @@ export default function EmployeeHistory() {
           try {
             const base64Data = reader.result as string;
             
-            // Call the Supabase Edge Function to handle the PDF upload and email sending
-            const { data, error } = await supabase.functions.invoke('send-signed-report', {
-              body: {
-                reportId: reportData.id,
-                employeeId: employeeId,
-                employeeName: employeeData.fiscal_name,
-                employeeEmail: employeeData.email,
-                reportStartDate: reportStartDate,
-                reportEndDate: reportEndDate,
-                pdfBase64: base64Data,
-                signatureData: signatureDataUrl
-              }
-            });
-
-            if (error) {
-              console.error('Error calling edge function:', error);
-              throw new Error('Error al procesar el informe firmado');
+            // Create a record in signed_reports table
+            const employeeId = localStorage.getItem('employeeId');
+            
+            // Create a signed report record
+            const { data: reportData, error: reportError } = await supabase
+              .from('signed_reports')
+              .insert([{
+                employee_id: employeeId,
+                report_url: 'pending', // Will be updated by the edge function
+                start_date: reportStartDate,
+                end_date: reportEndDate,
+                status: 'sent',
+                recipient_emails: [employeeData.email]
+              }])
+              .select();
+            
+            if (reportError) {
+              console.error('Error creating report record:', reportError);
+              throw new Error('Failed to create report record');
             }
-
-            // Update the report record with the public URL returned by the edge function
-            if (data && data.reportUrl) {
-              const { error: updateError } = await supabase
-                .from('signed_reports')
-                .update({ 
-                  status: 'viewed',
-                  report_url: data.reportUrl
-                })
-                .eq('id', reportData.id);
-                
-              if (updateError) {
-                console.error('Error updating report status:', updateError);
-                // Continue anyway since the email was sent
-              }
+            
+            // Use EmailJS to send the email with the PDF attachment
+            const emailParams = {
+              to_email: employeeData.email,
+              from_name: 'Nuevo Futuro - Sistema de Control Horario',
+              to_name: employeeData.fiscal_name,
+              message: `Adjunto encontrarás el informe firmado del periodo ${reportStartDate} al ${reportEndDate}.`,
+              report_pdf: base64Data,
+              reply_to: 'noreply@nuevofuturo.org',
+              start_date: reportStartDate,
+              end_date: reportEndDate
+            };
+            
+            const emailResult = await emailjs.send(
+              'service_otiqowa', // Your EmailJS service ID
+              'template_8bsjbnl', // Your EmailJS template ID for reports with attachments
+              emailParams,
+              'KxnX0MtAANy2LPlwd' // Your EmailJS public key
+            );
+            
+            if (emailResult.status !== 200) {
+              throw new Error('Error al enviar el informe por correo');
+            }
+            
+            // Update the report record with success status
+            const { error: updateError } = await supabase
+              .from('signed_reports')
+              .update({ 
+                status: 'viewed',
+                report_url: 'sent_via_emailjs' // Mark as sent via EmailJS
+              })
+              .eq('id', reportData[0].id);
+              
+            if (updateError) {
+              console.error('Error updating report status:', updateError);
+              // Continue anyway since the email was sent
             }
 
             toast.success('Informe firmado enviado por correo electrónico');
-            resolve(data);
+            resolve(emailResult);
           } catch (err) {
             console.error('Error sending report:', err);
             toast.error('Error al enviar el informe por correo');
