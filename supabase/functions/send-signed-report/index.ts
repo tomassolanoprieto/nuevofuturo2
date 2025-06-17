@@ -51,10 +51,10 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Get employee's work centers and company_id
+    // Get employee's coordinator email
     const { data: employeeData, error: employeeError } = await supabaseAdmin
       .from('employee_profiles')
-      .select('work_centers, company_id')
+      .select('work_centers')
       .eq('id', employeeId)
       .single();
 
@@ -116,29 +116,6 @@ Deno.serve(async (req: Request) => {
       .from('reports')
       .getPublicUrl(filePath);
 
-    // Insert record in signed_reports table with company_id
-    const { error: reportError } = await supabaseAdmin
-      .from('signed_reports')
-      .insert({
-        employee_id: employeeId,
-        company_id: employeeData.company_id,
-        report_url: urlData.publicUrl,
-        start_date: reportStartDate,
-        end_date: reportEndDate,
-        status: 'generated'
-      });
-
-    if (reportError) {
-      console.error('Error creating signed report record:', reportError);
-      return new Response(
-        JSON.stringify({ error: 'Failed to create report record', details: reportError.message }),
-        { 
-          status: 500, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        }
-      );
-    }
-
     // Create email recipients array
     const emailRecipients = [employeeEmail];
     if (coordinatorEmail) {
@@ -153,58 +130,12 @@ Deno.serve(async (req: Request) => {
           to_email: recipient,
           subject: `Informe firmado del ${reportStartDate} al ${reportEndDate}`,
           message: `Se ha generado un nuevo informe firmado para ${employeeName}. Puedes descargarlo desde: ${urlData.publicUrl}`,
-          report_url: urlData.publicUrl,
-          status: 'pending'
+          report_url: urlData.publicUrl
         });
 
       if (emailError) {
         console.error(`Email notification error for ${recipient}:`, emailError);
         // Continue with other recipients even if one fails
-      }
-    }
-
-    // Send email using Resend API
-    const resendApiKey = Deno.env.get('RESEND_API_KEY');
-    if (resendApiKey) {
-      try {
-        const emailResponse = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${resendApiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            from: 'Nuevo Futuro <no-reply@nuevofuturo.org>',
-            to: emailRecipients,
-            subject: `Informe firmado del ${reportStartDate} al ${reportEndDate}`,
-            html: `
-              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-                <h1 style="color: #2563eb; margin-bottom: 20px;">Informe de Jornada Laboral</h1>
-                <p style="margin-bottom: 20px;">Hola,</p>
-                <p style="margin-bottom: 20px;">Se ha generado un nuevo informe firmado para ${employeeName} correspondiente al período del ${reportStartDate} al ${reportEndDate}.</p>
-                <p style="margin-bottom: 20px;">Puedes descargar el informe haciendo clic en el siguiente enlace:</p>
-                <p style="margin-bottom: 20px;"><a href="${urlData.publicUrl}" style="display: inline-block; background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Descargar Informe</a></p>
-                <p style="color: #666; font-size: 14px;">Este correo ha sido generado automáticamente. Por favor, no responda a este mensaje.</p>
-              </div>
-            `,
-          }),
-        });
-
-        const emailResult = await emailResponse.json();
-        if (!emailResponse.ok) {
-          console.error('Error sending email:', emailResult);
-        } else {
-          // Update email notifications status
-          for (const recipient of emailRecipients) {
-            await supabaseAdmin
-              .from('email_notifications')
-              .update({ status: 'sent' })
-              .eq('to_email', recipient)
-              .eq('report_url', urlData.publicUrl);
-          }
-        }
-      } catch (emailError) {
-        console.error('Error sending email:', emailError);
       }
     }
 
