@@ -375,7 +375,7 @@ export default function EmployeeHistory() {
           try {
             const base64Data = reader.result as string;
             
-            // Create a record in signed_reports table
+            // Create a signed report record
             const employeeId = localStorage.getItem('employeeId');
             
             // Create a signed report record
@@ -396,13 +396,16 @@ export default function EmployeeHistory() {
               throw new Error('Failed to create report record');
             }
             
+            // Compress the PDF data by reducing quality
+            const compressedBase64 = await compressPDF(base64Data);
+            
             // Use EmailJS to send the email with the PDF attachment
             const emailParams = {
               to_email: employeeData.email,
               from_name: 'Nuevo Futuro - Sistema de Control Horario',
               to_name: employeeData.fiscal_name,
               message: `Adjunto encontrarás el informe firmado del periodo ${reportStartDate} al ${reportEndDate}.`,
-              report_pdf: base64Data,
+              report_pdf: compressedBase64,
               reply_to: 'noreply@nuevofuturo.org',
               start_date: reportStartDate,
               end_date: reportEndDate
@@ -451,6 +454,43 @@ export default function EmployeeHistory() {
       toast.error('Error al enviar el informe por correo');
       throw err;
     }
+  };
+
+  // Function to compress PDF data
+  const compressPDF = async (base64Data: string): Promise<string> => {
+    // Split the base64 string to separate the data type from the content
+    const [header, content] = base64Data.split(',');
+    
+    // Create a smaller PDF with reduced quality
+    const doc = new jsPDF();
+    
+    // Create a temporary image element to get dimensions
+    const img = new Image();
+    return new Promise((resolve) => {
+      img.onload = () => {
+        // Calculate dimensions to fit on PDF page (reducing size)
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+        
+        // Add the image at a smaller size and lower quality
+        doc.addImage(
+          base64Data, 
+          'PNG', 
+          0, 
+          0, 
+          pageWidth, 
+          pageHeight, 
+          undefined, 
+          'FAST' // Use FAST compression
+        );
+        
+        // Get the compressed PDF as base64
+        const compressedPDF = doc.output('datauristring');
+        resolve(compressedPDF);
+      };
+      
+      img.src = base64Data;
+    });
   };
 
   const generateSignedReport = async () => {
@@ -535,7 +575,11 @@ export default function EmployeeHistory() {
       }
 
       // Generar PDF
-      const doc = new jsPDF();
+      const doc = new jsPDF({
+        compress: true,
+        unit: 'mm',
+        format: 'a4'
+      });
 
       // Título
       doc.setFontSize(14);
@@ -592,7 +636,8 @@ export default function EmployeeHistory() {
           2: { cellWidth: 35 },
           3: { cellWidth: 35 },
           4: { cellWidth: 35 }
-        }
+        },
+        compress: true
       });
 
       // Total horas
@@ -618,7 +663,8 @@ export default function EmployeeHistory() {
           2: { cellWidth: 35 },
           3: { cellWidth: 35 },
           4: { cellWidth: 35 }
-        }
+        },
+        compress: true
       });
 
       // Firma del empleado (añadir imagen de la firma)
@@ -647,8 +693,15 @@ export default function EmployeeHistory() {
         align: 'justify'
       });
 
+      // Generate PDF with compression options
+      const pdfOptions = {
+        compress: true,
+        precision: 2,
+        quality: 0.8
+      };
+      
       // Guardar PDF y enviar por correo
-      const pdfBlob = doc.output('blob');
+      const pdfBlob = doc.output('blob', pdfOptions);
       await sendEmailWithReport(pdfBlob);
 
       // Descargar también localmente
@@ -780,7 +833,11 @@ export default function EmployeeHistory() {
       }
 
       // Generar PDF sin firma
-      const doc = new jsPDF();
+      const doc = new jsPDF({
+        compress: true,
+        unit: 'mm',
+        format: 'a4'
+      });
 
       // Título
       doc.setFontSize(14);
@@ -837,7 +894,8 @@ export default function EmployeeHistory() {
           2: { cellWidth: 35 },
           3: { cellWidth: 35 },
           4: { cellWidth: 35 }
-        }
+        },
+        compress: true
       });
 
       // Total horas
@@ -863,7 +921,8 @@ export default function EmployeeHistory() {
           2: { cellWidth: 35 },
           3: { cellWidth: 35 },
           4: { cellWidth: 35 }
-        }
+        },
+        compress: true
       });
 
       // Firmas
