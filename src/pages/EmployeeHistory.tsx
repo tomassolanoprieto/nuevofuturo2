@@ -4,6 +4,7 @@ import { Calendar, Download, FileText, PenTool, X, Check } from 'lucide-react';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { toast } from 'react-hot-toast';
+import emailjs from '@emailjs/browser';
 
 interface DailyReport {
   date: string;
@@ -363,8 +364,7 @@ export default function EmployeeHistory() {
 
   const sendEmailWithReport = async (pdfBlob: Blob) => {
     try {
-      const employeeId = localStorage.getItem('employeeId');
-      if (!employeeId || !employeeData) return;
+      if (!employeeData) return;
 
       // Convert blob to base64
       const reader = new FileReader();
@@ -375,34 +375,66 @@ export default function EmployeeHistory() {
           try {
             const base64Data = reader.result as string;
             
-            // Call the Edge Function to handle the upload and email notification
-            const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-signed-report`;
-            const headers = {
-              'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-              'Content-Type': 'application/json',
+            // Create a record in signed_reports table
+            const employeeId = localStorage.getItem('employeeId');
+            
+            // Create a signed report record
+            const { data: reportData, error: reportError } = await supabase
+              .from('signed_reports')
+              .insert([{
+                employee_id: employeeId,
+                report_url: 'pending', // Will be updated by the edge function
+                start_date: reportStartDate,
+                end_date: reportEndDate,
+                status: 'sent',
+                recipient_emails: [employeeData.email]
+              }])
+              .select();
+            
+            if (reportError) {
+              console.error('Error creating report record:', reportError);
+              throw new Error('Failed to create report record');
+            }
+            
+            // Use EmailJS to send the email with the PDF attachment
+            const emailParams = {
+              to_email: employeeData.email,
+              from_name: 'Nuevo Futuro - Sistema de Control Horario',
+              to_name: employeeData.fiscal_name,
+              message: `Adjunto encontrarás el informe firmado del periodo ${reportStartDate} al ${reportEndDate}.`,
+              report_pdf: base64Data,
+              reply_to: 'noreply@nuevofuturo.org',
+              start_date: reportStartDate,
+              end_date: reportEndDate
             };
-
-            const response = await fetch(apiUrl, {
-              method: 'POST',
-              headers,
-              body: JSON.stringify({
-                pdfBase64: base64Data,
-                employeeId: employeeId,
-                employeeName: employeeData.fiscal_name || '',
-                employeeEmail: employeeData.email,
-                reportStartDate: reportStartDate,
-                reportEndDate: reportEndDate
+            
+            const emailResult = await emailjs.send(
+              'service_5z1qv9z', // Your EmailJS service ID
+              'template_signed_report', // Your EmailJS template ID for reports with attachments
+              emailParams,
+              'YsQMH1h7gxb7yObr_' // Your EmailJS public key
+            );
+            
+            if (emailResult.status !== 200) {
+              throw new Error('Error al enviar el informe por correo');
+            }
+            
+            // Update the report record with success status
+            const { error: updateError } = await supabase
+              .from('signed_reports')
+              .update({ 
+                status: 'viewed',
+                report_url: 'sent_via_emailjs' // Mark as sent via EmailJS
               })
-            });
-
-            const result = await response.json();
-
-            if (!response.ok) {
-              throw new Error(result.error || 'Error al enviar el informe');
+              .eq('id', reportData[0].id);
+              
+            if (updateError) {
+              console.error('Error updating report status:', updateError);
+              // Continue anyway since the email was sent
             }
 
-            toast.success(result.message || 'Informe firmado enviado por correo electrónico');
-            resolve(result);
+            toast.success('Informe firmado enviado por correo electrónico');
+            resolve(emailResult);
           } catch (err) {
             console.error('Error sending report:', err);
             toast.error('Error al enviar el informe por correo');
@@ -512,8 +544,8 @@ export default function EmployeeHistory() {
       // Información de la empresa y empleado
       doc.setFontSize(10);
       const tableData = [
-        ['Empresa: Asociación Centro Trama', `Trabajador: ${employeeData.fiscal_name || ''}`],
-        ['C.I.F/N.I.F: G80054760', `N.I.F: ${employeeData.document_number || ''}`],
+        ['Empresa: NUEVO FUTURO', `Trabajador: ${employeeData.fiscal_name || ''}`],
+        ['C.I.F/N.I.F: G28309862', `N.I.F: ${employeeData.document_number || ''}`],
         [`Centro de Trabajo: ${employeeData.work_centers?.join(', ') || ''}`],
         ['C.C.C:', `Mes y Año: ${new Date(reportStartDate).toLocaleDateString('es-ES', { month: '2-digit', year: 'numeric' })}`]
       ];
