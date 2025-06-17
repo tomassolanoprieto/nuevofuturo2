@@ -409,10 +409,10 @@ export default function EmployeeHistory() {
             };
             
             const emailResult = await emailjs.send(
-              'service_5z1qv9z', // Your EmailJS service ID
-              'template_signed_report', // Your EmailJS template ID for reports with attachments
+              'service_otiqowa', // Your EmailJS service ID
+              'template_8bsjbnl', // Your EmailJS template ID for reports with attachments
               emailParams,
-              'YsQMH1h7gxb7yObr_' // Your EmailJS public key
+              'KxnX0MtAANy2LPlwd' // Your EmailJS public key
             );
             
             if (emailResult.status !== 200) {
