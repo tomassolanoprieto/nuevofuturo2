@@ -405,9 +405,9 @@ export default function EmployeeHistory() {
                 employeeId: employeeId,
                 employeeName: employeeData.fiscal_name,
                 employeeEmail: employeeData.email,
-                startDate: reportStartDate,
-                endDate: reportEndDate,
-                pdfData: base64Data,
+                reportStartDate: reportStartDate,
+                reportEndDate: reportEndDate,
+                pdfBase64: base64Data,
                 signatureData: signatureDataUrl
               }
             });
