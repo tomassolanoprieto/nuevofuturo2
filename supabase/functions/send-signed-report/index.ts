@@ -1,5 +1,4 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { Resend } from 'npm:resend@1.0.0';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -29,9 +28,6 @@ Deno.serve(async (req: Request) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Initialize Resend email client
-    const resend = new Resend(Deno.env.get('RESEND_API_KEY') ?? '');
-
     if (req.method !== 'POST') {
       return new Response(
         JSON.stringify({ error: 'Method not allowed' }),
@@ -55,10 +51,10 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Get employee's data including company_id
+    // Get employee's coordinator email
     const { data: employeeData, error: employeeError } = await supabaseAdmin
       .from('employee_profiles')
-      .select('work_centers, company_id')
+      .select('work_centers')
       .eq('id', employeeId)
       .single();
 
@@ -120,71 +116,27 @@ Deno.serve(async (req: Request) => {
       .from('reports')
       .getPublicUrl(filePath);
 
-    // Create signed_reports record
-    const { data: reportRecord, error: reportError } = await supabaseAdmin
-      .from('signed_reports')
-      .insert({
-        employee_id: employeeId,
-        report_url: urlData.publicUrl,
-        start_date: reportStartDate,
-        end_date: reportEndDate,
-        status: 'sent',
-        company_id: employeeData.company_id
-      })
-      .select()
-      .single();
-
-    if (reportError) {
-      console.error('Error creating report record:', reportError);
-      return new Response(
-        JSON.stringify({ error: 'Failed to create report record', details: reportError.message }),
-        { 
-          status: 500, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        }
-      );
-    }
-
     // Create email recipients array
     const emailRecipients = [employeeEmail];
     if (coordinatorEmail) {
       emailRecipients.push(coordinatorEmail);
     }
 
-    // Send email using Resend
-    try {
-      const { data: emailData, error: emailError } = await resend.emails.send({
-        from: 'Nuevo Futuro <no-reply@nuevofuturo.org>',
-        to: emailRecipients,
-        subject: `Informe firmado del ${reportStartDate} al ${reportEndDate}`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h1 style="color: #2563eb; margin-bottom: 20px;">Informe de Jornada Laboral</h1>
-            <p style="margin-bottom: 20px;">Hola,</p>
-            <p style="margin-bottom: 20px;">Se ha generado un nuevo informe firmado para ${employeeName} correspondiente al período del ${reportStartDate} al ${reportEndDate}.</p>
-            <p style="margin-bottom: 20px;">Puedes acceder al informe a través del siguiente enlace:</p>
-            <p style="margin-bottom: 30px;">
-              <a href="${urlData.publicUrl}" style="background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">Ver Informe</a>
-            </p>
-            <p style="color: #666; font-size: 14px;">Este es un correo automático, por favor no responda a este mensaje.</p>
-          </div>
-        `,
-      });
+    // Insert email notification records for each recipient
+    for (const recipient of emailRecipients) {
+      const { error: emailError } = await supabaseAdmin
+        .from('email_notifications')
+        .insert({
+          to_email: recipient,
+          subject: `Informe firmado del ${reportStartDate} al ${reportEndDate}`,
+          message: `Se ha generado un nuevo informe firmado para ${employeeName}. Puedes descargarlo desde: ${urlData.publicUrl}`,
+          report_url: urlData.publicUrl
+        });
 
       if (emailError) {
-        console.error('Email sending error:', emailError);
-        // Continue even if email fails, we'll still update the database
+        console.error(`Email notification error for ${recipient}:`, emailError);
+        // Continue with other recipients even if one fails
       }
-
-      // Update recipient_emails in the signed_reports table
-      await supabaseAdmin
-        .from('signed_reports')
-        .update({ recipient_emails: emailRecipients })
-        .eq('id', reportRecord.id);
-
-    } catch (emailSendError) {
-      console.error('Error sending email:', emailSendError);
-      // Continue even if email fails, we'll still return success for the report creation
     }
 
     return new Response(
@@ -192,8 +144,7 @@ Deno.serve(async (req: Request) => {
         success: true, 
         message: 'Informe firmado enviado por correo electrónico',
         reportUrl: urlData.publicUrl,
-        recipients: emailRecipients,
-        reportId: reportRecord.id
+        recipients: emailRecipients
       }),
       { 
         status: 200, 

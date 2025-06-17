@@ -395,12 +395,12 @@ export default function EmployeeHistory() {
               })
             });
 
+            const result = await response.json();
+
             if (!response.ok) {
-              const errorData = await response.json();
-              throw new Error(errorData.error || 'Error al enviar el informe');
+              throw new Error(result.error || 'Error al enviar el informe');
             }
 
-            const result = await response.json();
             toast.success(result.message || 'Informe firmado enviado por correo electrónico');
             resolve(result);
           } catch (err) {
@@ -512,8 +512,8 @@ export default function EmployeeHistory() {
       // Información de la empresa y empleado
       doc.setFontSize(10);
       const tableData = [
-        ['Empresa: NUEVO FUTURO', `Trabajador: ${employeeData.fiscal_name || ''}`],
-        ['C.I.F/N.I.F: G28309862', `N.I.F: ${employeeData.document_number || ''}`],
+        ['Empresa: Asociación Centro Trama', `Trabajador: ${employeeData.fiscal_name || ''}`],
+        ['C.I.F/N.I.F: G80054760', `N.I.F: ${employeeData.document_number || ''}`],
         [`Centro de Trabajo: ${employeeData.work_centers?.join(', ') || ''}`],
         ['C.C.C:', `Mes y Año: ${new Date(reportStartDate).toLocaleDateString('es-ES', { month: '2-digit', year: 'numeric' })}`]
       ];
