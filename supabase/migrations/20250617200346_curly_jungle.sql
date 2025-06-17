@@ -44,7 +44,7 @@ CREATE POLICY "Employees can view their own signed reports"
   ON signed_reports
   FOR SELECT
   TO authenticated
-  USING (employee_id = uid());
+  USING (employee_id = auth.uid());
 
 -- Supervisors can view reports for employees they supervise (center supervisors)
 CREATE POLICY "Supervisors can view reports for employees they supervise (cent"
@@ -55,7 +55,7 @@ CREATE POLICY "Supervisors can view reports for employees they supervise (cent"
     EXISTS (
       SELECT 1 FROM supervisor_profiles sp
       JOIN employee_profiles ep ON ep.id = signed_reports.employee_id
-      WHERE sp.id = uid()
+      WHERE sp.id = auth.uid()
         AND sp.is_active = true
         AND sp.supervisor_type = 'center'
         AND ep.work_centers && sp.work_centers
@@ -71,7 +71,7 @@ CREATE POLICY "Supervisors can view reports for employees they supervise (dele"
     EXISTS (
       SELECT 1 FROM supervisor_profiles sp
       JOIN employee_profiles ep ON ep.id = signed_reports.employee_id
-      WHERE sp.id = uid()
+      WHERE sp.id = auth.uid()
         AND sp.is_active = true
         AND sp.supervisor_type = 'delegation'
         AND ep.delegation = ANY(sp.delegations)
